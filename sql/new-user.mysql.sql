@@ -1,0 +1,3 @@
+CREATE USER IF NOT EXISTS myroot@localhost IDENTIFIED BY 'asa1ase3';
+GRANT ALL PRIVILEGES ON *.* TO myroot@localhost WITH GRANT OPTION;
+
