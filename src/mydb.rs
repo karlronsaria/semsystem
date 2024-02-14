@@ -1,9 +1,10 @@
 use sqlx::{mysql::MySqlPool, Row};
-use serde::Deserialize;
 use chrono::NaiveDate;
 
+pub mod get;
+
 #[allow(non_snake_case)]
-#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Item {
     Name: String,
     Description: Option<String>,
@@ -16,11 +17,12 @@ pub struct Item {
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
     Created: Option<NaiveDate>,
+
     Tags: Vec<String>,
 }
 
 #[allow(non_snake_case)]
-#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Tag {
     Name: String,
 
@@ -48,7 +50,7 @@ where
 }
 
 #[allow(non_snake_case)]
-#[derive(Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug)]
 pub struct DbRoot {
     Items: Vec<Item>,
 }
@@ -130,7 +132,7 @@ fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     let mut tags = std::
         collections::
         BTreeMap::
-        <String, Tag>::
+        <&str, Tag>::
         new();
 
     for item in items {
@@ -141,7 +143,7 @@ fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
             };
 
             tags
-                .entry(tag_name.to_string())
+                .entry(tag_name)
                 .or_insert(tag);
         }
     }
@@ -164,112 +166,6 @@ INSERT IGNORE INTO `{}`.`Tag` (
             .collect::<Vec<String>>()
             .join("\n), (\n    "),
     )
-}
-
-pub async fn get_tag_from_itemid(
-    pool: &MySqlPool,
-    db_name: &str,
-    item_id: i32,
-) -> Vec<(i32, Tag)> {
-    match sqlx::query(
-        format!(
-            r#"
-SELECT *
-FROM
-    `{db_name}`.`Tag`
-    LEFT JOIN
-    `{db_name}`.`Item_has_Tag`
-    ON `Id` = `Tag_Id`
-WHERE
-    `Item_Id` = ?
-;
-            "#
-        )
-        .as_str()
-    )
-    .bind(item_id)
-    .fetch_all(pool)
-    .await {
-        Err(msg) => {
-            eprintln!("Error: {}", msg);
-            vec![]
-        },
-
-        Ok(list) => list
-            .iter()
-            .map(|row| {
-                let id: i32 = row.get("Id");
-
-                let tag = Tag {
-                    Name: row.get("Name"),
-                    Created: row
-                        .try_get::<NaiveDate, &str>("Created")
-                        .ok(),
-                };
-
-                (id, tag)
-            })
-            .collect::<Vec<(i32, Tag)>>(),
-    }
-}
-
-pub async fn get_item_from_tagname(
-    pool: &MySqlPool,
-    db_name: &str,
-    tag_name: &str,
-) -> Vec<(i32, Item)> {
-    match sqlx::query(
-        format!(
-            r#"
-SELECT *
-FROM
-    `{db_name}`.`Item`
-    LEFT JOIN
-    `{db_name}`.`Item_has_Tag`
-    ON `Id` = `Item_Id`
-WHERE
-    `Tag_Id` = (
-        SELECT `Id`
-        FROM `Tag`
-        WHERE `Name` = ?
-    )
-;
-            "#
-        )
-        .as_str()
-    )
-    .bind(tag_name)
-    .fetch_all(pool)
-    .await {
-        Err(msg) => {
-            eprintln!("Error: {}", msg);
-            vec![]
-        },
-
-        Ok(list) => list
-            .iter()
-            .map(|row| {
-                let id: i32 = row.get("Id");
-
-                let item = Item {
-                    Name: row.get("Name"),
-                    Description: row.get("Description"),
-                    Arrival: row
-                        .try_get::<NaiveDate, &str>("Arrival")
-                        .ok(),
-                    Expiry: row
-                        .try_get::<NaiveDate, &str>("Expiry")
-                        .ok(),
-                    Created: row
-                        .try_get::<NaiveDate, &str>("Created")
-                        .ok(),
-                    Tags: vec![],
-                };
-
-                (id, item)
-            })
-            .collect::<Vec<(i32, Item)>>(),
-    }
 }
 
 pub async fn add_by_name_itemhastag(
@@ -440,7 +336,7 @@ pub mod tests {
                     .filter(|x| x.Name.starts_with("Finance"))
                     .collect();
 
-                let queried_items = get_item_from_tagname(
+                let queried_items = get::item_from_tagname(
                     &pool,
                     &mydb::DB,
                     "finance",
@@ -451,11 +347,19 @@ pub mod tests {
                     .into_iter()
                     .enumerate()
                 {
-                    let tags = get_tag_from_itemid(
+                    let tags = get::tag_from_itemid(
                         &pool,
                         &mydb::DB,
-                        id
+                        id,
                     )
+
+                    // let tags = get::tag(
+                    //     &pool,
+                    //     &mydb::DB,
+                    //     "`Item_Id` =",
+                    //     &id.to_string(),
+                    // )
+
                     .await
                     .into_iter()
                     .map(|(_, tag)| tag.Name)

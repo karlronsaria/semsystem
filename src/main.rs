@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
     let (pool, _) = mydb::reset_db(&opts)
         .await?;
 
-    for item in mydb::get_item_from_tagname(
+    for item in mydb::get::item_from_tagname(
         &pool,
         &mydb::DB,
         "finance"
