@@ -1,11 +1,333 @@
-use sqlx::{mysql::MySqlPool, Row};
+use sqlx::{mysql::MySqlPool, mysql::MySqlRow, Row};
 use chrono::NaiveDate;
 
-pub mod get;
+pub const MAIN_TABLE: &str = "item";
+pub const USER: &str = "myroot";
+pub const PASS: &str = "asa1ase3";
+pub const HOST: &str = "localhost";
+pub const DB: &str = "mydb";
+pub const DT_FORMAT: &str = "%Y_%m_%d";
+pub const NEWDB_SQL_PATH: &str = "./sql/new-db.mysql.sql";
+pub const ITEM_JSON_PATH: &str = "./json/Item.json";
+
+#[derive(Clone)]
+pub enum When<T: std::clone::Clone> {
+    Equal(T),
+    Like(T),
+    Match(T),
+    Approx(T),
+    Other(T),
+}
+
+impl<'a> Default for When<&'a str> {
+    fn default() -> When<&'a str> {
+        When::<&'a str>::Equal("?")
+    }
+}
+
+#[derive(Debug, Default)]
+struct QueryString {
+    from: String,
+    where_clause: String,
+}
+
+impl ToString for QueryString {
+    fn to_string(&self) -> String {
+        format!(
+            r#"
+FROM
+    {}
+WHERE
+    {}
+;
+            "#,
+            self.from,
+            self.where_clause,
+        )
+    }
+}
+
+fn new_query_str<'a>(
+    db: &'a str,
+    from: &'a str,
+    to: &'a str,
+    by: &'a str,
+    when: When<&'a str>,
+    minus: Option<&'a Vec<i32>>,
+) -> Option<QueryString> {
+    let search_type = match when {
+        When::Equal(x) => format!("= {}", x),
+        When::Like(x) => format!("LIKE {}%", x),
+        When::Match(x) => format!("RLIKE {}", x),
+        When::Approx(_) => {
+            eprintln!(
+                "Error: new_query_str: Fuzzy search not yet implemented",
+            );
+
+            return None;
+        },
+        When::Other(x) => x.to_string(),
+    };
+
+    let to =
+        if to.is_empty() {
+            from
+        }
+        else {
+            to
+        };
+
+    let query =
+        if to == from {
+            QueryString {
+                from: format!("`{db}`.`{}`", to.to_string()),
+                where_clause: format!("`{db}`.{}` {search_type}", by.to_string()),
+            }
+        }
+        else {
+            let other_table: &'a str =
+                if from == MAIN_TABLE {
+                    to
+                }
+                else if to == MAIN_TABLE {
+                    from
+                }
+                else {
+                    eprintln!(
+                        "Error: new_query_str: main table '{}' missing in query",
+                        MAIN_TABLE,
+                    );
+
+                    return None;
+                };
+
+            let from_table_str: String = format!(
+                "`{db}`.`{to}` LEFT JOIN `{db}`.`item_has_{other_table}` ON `id` = `{to}_id`"
+            );
+
+            QueryString {
+                from: from_table_str,
+                where_clause:
+                    format!(
+                        "`{from}_id` = (SELECT `id` FROM `{from}` WHERE `{by}` {search_type})"
+                    ),
+            }
+        };
+
+    let query = match minus {
+        Some(exclude_ids) if exclude_ids.len() > 0 => {
+            let exclude_ids = exclude_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            QueryString {
+                from:
+                    query.from.to_string(),
+                where_clause:
+                    format!(
+                        "{} and `{to}_id` not in ({})",
+                        query.where_clause,
+                        exclude_ids,
+                    ),
+            }
+        },
+
+        _ => query,
+    };
+
+    Some(query)
+}
+
+#[derive(Clone)]
+pub struct Query<'a> {
+    pool: &'a MySqlPool,
+    db_name: &'a str,
+    from: &'a str,
+    by: &'a str,
+    when: Vec<When<&'a str>>,
+    sentinel: String,
+    minus: Option<&'a Vec<i32>>,
+}
+
+pub trait MySqlMarshal {
+    fn marshal(row: MySqlRow) -> Self;
+    fn col_name() -> String;
+    fn table_name() -> String;
+}
+
+impl<'a> Query<'a> {
+    pub fn builder(pool: &'a MySqlPool) -> QueryBuilder::<'a> {
+        QueryBuilder::<'a>::new(pool)
+    }
+
+    pub async fn to_complete_item(&self, item: Item) -> Item {
+        let tags = Query::builder(self.pool)
+            .db_name(self.db_name)
+            .from("item")
+            .to("tag")
+            .by("id")
+            .sentinel(item.Id)
+            .build()
+            .to::<Tag>()
+            .await
+            .into_iter()
+            .map(|tag| tag.Name)
+            .collect::<Vec<String>>();
+
+        Item {
+            Tags: tags,
+            ..item.clone()
+        }
+    }
+
+    pub async fn to_complete_items(&self) -> Vec<Item> {
+        let mut list: Vec<Item> = vec![];
+
+        let items = self
+            .to::<Item>()
+            .await;
+
+        // Do not try to map iterators here.
+        for item in items {
+            list.push(self.to_complete_item(item).await);
+        }
+
+        list
+    }
+
+    pub async fn to<T>(&self) -> Vec<T>
+    where
+        T: MySqlMarshal
+    {
+        let query = new_query_str(
+            self.db_name,
+            self.from,
+            T::table_name().as_str(),
+            self.by,
+            self.when[0].clone(),
+            self.minus,
+        );
+
+        if let Some(q) = query {
+            let query = format!(
+                "SELECT {} {}",
+                T::col_name(),
+                q.to_string()
+            );
+
+            match sqlx::query(query.as_str())
+                .bind(self.sentinel.clone())
+                .fetch_all(self.pool)
+                .await {
+                    Err(msg) => {
+                        eprintln!("Error: {}", msg);
+                        vec![]
+                    },
+
+                    Ok(rows) => rows
+                        .into_iter()
+                        .map(|row| T::marshal(row))
+                        .collect::<Vec<T>>(),
+                }
+        }
+        else {
+            return vec![]
+        }
+    }
+}
+
+pub struct QueryBuilder<'a> {
+    pool: &'a MySqlPool,
+    db_name: &'a str,
+    from: &'a str,
+    to: &'a str,
+    by: &'a str,
+    when: Vec<When<&'a str>>,
+    sentinel: String,
+    minus: Option<&'a Vec<i32>>,
+}
+
+impl<'a> QueryBuilder<'a> {
+    pub const DEFAULT_WHEN: When<&'static str> = When::Equal("?");
+    pub const DEFAULT_STR: &'static str = "";
+
+    pub fn new(pool: &'a MySqlPool) -> Self {
+        QueryBuilder {
+            pool: pool,
+            db_name: Self::DEFAULT_STR,
+            from: Self::DEFAULT_STR,
+            to: Self::DEFAULT_STR,
+            by: Self::DEFAULT_STR,
+            when: vec![Self::DEFAULT_WHEN],
+            sentinel: Self::DEFAULT_STR.to_string(),
+            minus: None,
+        }
+    }
+
+    pub fn pool(&'a mut self, pool: &'a MySqlPool) -> &'a mut Self {
+        self.pool = pool;
+        self
+    }
+
+    pub fn db_name(&'a mut self, db_name: &'a str) -> &'a mut Self {
+        self.db_name = db_name;
+        self
+    }
+
+    pub fn from(&'a mut self, from: &'a str) -> &'a mut Self {
+        self.from = from;
+        self
+    }
+
+    pub fn to(&'a mut self, to: &'a str) -> &'a mut Self {
+        self.to = to;
+        self
+    }
+
+    pub fn by(&'a mut self, by: &'a str) -> &'a mut Self {
+        self.by = by;
+        self
+    }
+
+    pub fn when(&'a mut self, when: &'a Vec<When<&'a str>>) -> &'a mut Self {
+        self.when = when.clone();
+        self
+    }
+
+    pub fn sentinel<T>(&'a mut self, sentinel: T) -> &'a mut Self
+    where
+        T: ToString,
+    {
+        self.sentinel = sentinel.to_string();
+        self
+    }
+
+    pub fn minus(&'a mut self, minus: Option<&'a Vec<i32>>) -> &'a mut Self {
+        self.minus = minus;
+        self
+    }
+
+    pub fn build(&'a self) -> Query<'a> {
+        Query {
+            pool: self.pool,
+            db_name: self.db_name,
+            from: self.from,
+            by: self.by,
+            when: self.when.clone(),
+            sentinel: self.sentinel.clone(),
+            minus: self.minus.clone(),
+        }
+    }
+}
 
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Item {
+    #[serde(default)]
+    Id: i32,
+
     Name: String,
     Description: Option<String>,
 
@@ -24,6 +346,9 @@ pub struct Item {
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Tag {
+    #[serde(default)]
+    Id: i32,
+
     Name: String,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
@@ -55,14 +380,52 @@ pub struct DbRoot {
     Items: Vec<Item>,
 }
 
-pub const USER: &str = "myroot";
-pub const PASS: &str = "asa1ase3";
-pub const HOST: &str = "localhost";
-pub const DB: &str = "mydb";
-pub const DT_FORMAT: &str = "%Y_%m_%d";
+impl MySqlMarshal for i32 {
+    fn marshal(row: MySqlRow) -> i32 {
+        row.get("Id")
+    }
 
-const NEWDB_SQL_PATH: &str = "./sql/new-db.mysql.sql";
-const ITEM_JSON_PATH: &str = "./json/Item.json";
+    fn col_name() -> String { String::from("`Id`") }
+    fn table_name() -> String { String::new() }
+}
+
+impl MySqlMarshal for Item {
+    fn marshal(row: MySqlRow) -> Item {
+        Item {
+            Id: row.get("Id"),
+            Name: row.get("Name"),
+            Description: row.get("Description"),
+            Arrival: row
+                .try_get::<NaiveDate, &str>("Arrival")
+                .ok(),
+            Expiry: row
+                .try_get::<NaiveDate, &str>("Expiry")
+                .ok(),
+            Created: row
+                .try_get::<NaiveDate, &str>("Created")
+                .ok(),
+            Tags: vec![],
+        }
+    }
+
+    fn col_name() -> String { String::from("*") }
+    fn table_name() -> String { String::from("item") }
+}
+
+impl MySqlMarshal for Tag {
+    fn marshal(row: MySqlRow) -> Tag {
+        Tag {
+            Id: row.get("Id"),
+            Name: row.get("Name"),
+            Created: row
+                .try_get::<NaiveDate, &str>("Created")
+                .ok(),
+        }
+    }
+
+    fn col_name() -> String { String::from("*") }
+    fn table_name() -> String { String::from("tag") }
+}
 
 fn string_to_dbrow(input: &Option<String>) -> String {
     match input {
@@ -138,6 +501,7 @@ fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     for item in items {
         for tag_name in &item.Tags {
             let tag = Tag {
+                Id: -1,
                 Name: tag_name.clone(),
                 Created: item.Created.clone(),
             };
@@ -329,6 +693,8 @@ pub mod tests {
             .password(mydb::PASS)
             .database(mydb::DB);
 
+        let minus: Vec<i32> = vec![2, 4];
+
         tokio_test::block_on(async {
             if let Ok((pool, root)) = reset_db(&opts).await {
                 let finance_items: Vec<Item> = root.Items
@@ -336,41 +702,43 @@ pub mod tests {
                     .filter(|x| x.Name.starts_with("Finance"))
                     .collect();
 
-                let queried_items = get::item_from_tagname(
-                    &pool,
-                    &mydb::DB,
-                    "finance",
-                )
-                .await;
-
-                for (index, (id, item)) in queried_items
-                    .into_iter()
-                    .enumerate()
-                {
-                    let tags = get::tag_from_itemid(
-                        &pool,
-                        &mydb::DB,
-                        id,
-                    )
-
-                    // let tags = get::tag(
-                    //     &pool,
-                    //     &mydb::DB,
-                    //     "`Item_Id` =",
-                    //     &id.to_string(),
-                    // )
-
-                    .await
-                    .into_iter()
-                    .map(|(_, tag)| tag.Name)
-                    .collect::<Vec<String>>();
-
-                    let item = Item {
-                        Tags: tags,
-                        ..item
+                let finance_items =
+                    if minus.len() > 0 {
+                        finance_items
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(index, _)| {
+                                // (karlr 2024_02_15)
+                                // ``&((*index as i32) + 1)`` !!!?
+                                // I really feel like I shouldn't have to do this.
+                                !minus.contains(&((*index as i32) + 1))
+                            })
+                            .map(|(_, value)| value)
+                            .collect::<Vec<Item>>()
+                    }
+                    else {
+                        finance_items
                     };
 
-                    assert_eq!(item, finance_items[index]);
+                let queried_items = Query::builder(&pool)
+                    .db_name(&mydb::DB)
+                    .from("tag")
+                    .to("item")
+                    .by("name")
+                    .when(&vec![When::Equal("?")])
+                    .sentinel("finance")
+                    .minus(Some(&minus))
+                    .build()
+                    .to_complete_items()
+                    .await;
+
+                assert_ne!(queried_items.len(), 0);
+
+                for (index, item) in queried_items
+                    .iter()
+                    .enumerate()
+                {
+                    assert_eq!(*item, finance_items[index]);
                 }
             }
         });

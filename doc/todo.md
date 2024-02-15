@@ -1,0 +1,56 @@
+# todo
+
+- add
+    - item
+    - tag
+    - date
+    - tag to item
+    - date to item
+- update
+    - item
+    - CANNOT BE UPDATED
+        - tag
+        - date
+- remove (by id only)
+    - item
+    - tag
+    - date
+    - tag from item
+    - date from item
+- select
+    - items
+        - by name
+            - tables
+                - item
+            - clauses
+                - exact
+                    - name = ?
+                - substring
+                    - name like ?
+                - pattern
+                    - name match ?
+                - fuzzy
+                    - ???
+        - by tag
+            - tables
+                - item
+                - item_has_tag
+            - clauses
+                - exact
+                    - tag_id = (select id from tag where name = ?)
+                - substring
+                    - tag_id = (select id from tag where name like ?)
+                - pattern
+                    - tag_id = (select id from tag where name match ?)
+                - fuzzy
+                    - ???
+    - tags
+        - by name
+            - exact
+            - substring
+            - pattern
+        - by item
+            - exact
+            - substring
+            - pattern
+

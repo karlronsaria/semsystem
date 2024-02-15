@@ -1,6 +1,7 @@
 {
 "Items": [
     {
+        "Id": 1,
         "Name": "Finance Satement 000.pdf",
         "Description": null,
         "Arrival": "2023_10_01",
@@ -9,6 +10,7 @@
         "Tags": ["finance"]
     },
     {
+        "Id": 2,
         "Name": "Finance Satement 001.pdf",
         "Description": null,
         "Arrival": "2023_11_01",
@@ -17,6 +19,7 @@
         "Tags": ["finance"]
     },
     {
+        "Id": 3,
         "Name": "Finance Satement 002.pdf",
         "Description": null,
         "Arrival": "2023_12_01",
@@ -25,6 +28,7 @@
         "Tags": ["finance"]
     },
     {
+        "Id": 4,
         "Name": "Finance Satement 003.pdf",
         "Description": null,
         "Arrival": "2024_01_01",
@@ -33,6 +37,7 @@
         "Tags": ["finance"]
     },
     {
+        "Id": 5,
         "Name": "Auto Claim - December 2022.pdf",
         "Description": null,
         "Arrival": "2022_12_12",
@@ -41,6 +46,7 @@
         "Tags": ["auto", "claim"]
     },
     {
+        "Id": 6,
         "Name": "Auto Claim - January 2023.pdf",
         "Description": null,
         "Arrival": "2023_01_13",
