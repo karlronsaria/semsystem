@@ -166,7 +166,6 @@ impl<'a> Query<'a> {
         let tags = Query::builder(self.pool)
             .db_name(self.db_name)
             .from("item")
-            .to("tag")
             .by("id")
             .sentinel(item.Id)
             .build()
@@ -242,7 +241,6 @@ pub struct QueryBuilder<'a> {
     pool: &'a MySqlPool,
     db_name: &'a str,
     from: &'a str,
-    to: &'a str,
     by: &'a str,
     when: Vec<When<&'a str>>,
     sentinel: String,
@@ -258,7 +256,6 @@ impl<'a> QueryBuilder<'a> {
             pool: pool,
             db_name: Self::DEFAULT_STR,
             from: Self::DEFAULT_STR,
-            to: Self::DEFAULT_STR,
             by: Self::DEFAULT_STR,
             when: vec![Self::DEFAULT_WHEN],
             sentinel: Self::DEFAULT_STR.to_string(),
@@ -278,11 +275,6 @@ impl<'a> QueryBuilder<'a> {
 
     pub fn from(&'a mut self, from: &'a str) -> &'a mut Self {
         self.from = from;
-        self
-    }
-
-    pub fn to(&'a mut self, to: &'a str) -> &'a mut Self {
-        self.to = to;
         self
     }
 
@@ -386,7 +378,7 @@ pub struct Id<T> {
 }
 
 impl<T> Id<T> {
-    pub fn id(&self) -> i32 { self.id }
+    pub fn get(&self) -> i32 { self.id }
 }
 
 impl MySqlMarshal for i32 {
@@ -404,7 +396,7 @@ where
 {
     fn marshal(row: MySqlRow) -> Id<T> {
         Id::<T> {
-            id: i32::marshal(),
+            id: i32::marshal(row),
             phantom: std::marker::PhantomData,
         }
     }
@@ -747,7 +739,6 @@ pub mod tests {
                 let queried_items = Query::builder(&pool)
                     .db_name(&mydb::DB)
                     .from("tag")
-                    .to("item")
                     .by("name")
                     .when(&vec![When::Equal("?")])
                     .sentinel("finance")
