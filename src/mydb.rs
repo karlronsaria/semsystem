@@ -380,6 +380,15 @@ pub struct DbRoot {
     Items: Vec<Item>,
 }
 
+pub struct Id<T> {
+    id: i32,
+    phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> Id<T> {
+    pub fn id(&self) -> i32 { self.id }
+}
+
 impl MySqlMarshal for i32 {
     fn marshal(row: MySqlRow) -> i32 {
         row.get("Id")
@@ -387,6 +396,21 @@ impl MySqlMarshal for i32 {
 
     fn col_name() -> String { String::from("`Id`") }
     fn table_name() -> String { String::new() }
+}
+
+impl<T> MySqlMarshal for Id<T>
+where
+    T: MySqlMarshal,
+{
+    fn marshal(row: MySqlRow) -> Id<T> {
+        Id::<T> {
+            id: i32::marshal(),
+            phantom: std::marker::PhantomData,
+        }
+    }
+
+    fn col_name() -> String { i32::col_name() }
+    fn table_name() -> String { T::table_name() }
 }
 
 impl MySqlMarshal for Item {
