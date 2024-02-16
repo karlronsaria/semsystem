@@ -9,5 +9,5 @@ set "app=mysql --login-path=%loginPath%"
 
 cargo %1
 
-cat %~dp0./sql/select-assoc.mysql.sql | %app%
+:: cat %~dp0./sql/select-assoc.mysql.sql | %app%
 

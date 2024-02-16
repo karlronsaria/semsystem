@@ -10,13 +10,25 @@ pub const DT_FORMAT: &str = "%Y_%m_%d";
 pub const NEWDB_SQL_PATH: &str = "./sql/new-db.mysql.sql";
 pub const ITEM_JSON_PATH: &str = "./json/Item.json";
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum When<T: std::clone::Clone> {
     Equal(T),
     Like(T),
     Match(T),
     Approx(T),
     Other(T),
+}
+
+impl<T: std::clone::Clone> When<T> {
+    fn into_when<R: std::clone::Clone>(&self, to: R) -> When<R> {
+        match self {
+            When::Equal(_) => When::Equal(to),
+            When::Like(_) => When::Like(to),
+            When::Match(_) => When::Match(to),
+            When::Approx(_) => When::Approx(to),
+            When::Other(_) => When::Other(to),
+        }
+    }
 }
 
 impl<'a> Default for When<&'a str> {
@@ -56,9 +68,9 @@ fn new_query_str<'a>(
     minus: Option<&'a Vec<i32>>,
 ) -> Option<QueryString> {
     let search_type = match when {
-        When::Equal(x) => format!("= {}", x),
-        When::Like(x) => format!("LIKE {}%", x),
-        When::Match(x) => format!("RLIKE {}", x),
+        When::Equal(x) => format!("= ({})", x),
+        When::Like(x) => format!("LIKE CONCAT({}, '%')", x),
+        When::Match(x) => format!("RLIKE ({})", x),
         When::Approx(_) => {
             eprintln!(
                 "Error: new_query_str: Fuzzy search not yet implemented",
@@ -69,19 +81,13 @@ fn new_query_str<'a>(
         When::Other(x) => x.to_string(),
     };
 
-    let to =
-        if to.is_empty() {
-            from
-        }
-        else {
-            to
-        };
+    let to = if to.is_empty() { from } else { to };
 
     let query =
         if to == from {
             QueryString {
-                from: format!("`{db}`.`{}`", to.to_string()),
-                where_clause: format!("`{db}`.{}` {search_type}", by.to_string()),
+                from: format!("`{db}`.`{to}`"),
+                where_clause: format!("`{by}` {search_type}"),
             }
         }
         else {
@@ -140,6 +146,13 @@ fn new_query_str<'a>(
     Some(query)
 }
 
+pub trait MySqlMarshal {
+    fn marshal(row: MySqlRow) -> Self;
+    fn col_name() -> String;
+    fn table_name() -> String;
+    fn id(&self) -> i32;
+}
+
 #[derive(Clone)]
 pub struct Query<'a> {
     pool: &'a MySqlPool,
@@ -149,12 +162,6 @@ pub struct Query<'a> {
     when: Vec<When<&'a str>>,
     sentinel: String,
     minus: Option<&'a Vec<i32>>,
-}
-
-pub trait MySqlMarshal {
-    fn marshal(row: MySqlRow) -> Self;
-    fn col_name() -> String;
-    fn table_name() -> String;
 }
 
 impl<'a> Query<'a> {
@@ -196,24 +203,83 @@ impl<'a> Query<'a> {
         list
     }
 
+    pub async fn to_tiers<T>(&self) -> Vec<When<Vec<T>>>
+    where
+        T: MySqlMarshal
+            + std::clone::Clone
+            + Eq
+            + PartialEq
+    {
+        self.get_tiered_results(self.when.clone()).await
+    }
+
     pub async fn to<T>(&self) -> Vec<T>
     where
         T: MySqlMarshal
+            + std::clone::Clone
+            + Eq
+            + PartialEq
+    {
+        self.get_results(
+            self.when[0].clone(),
+            self.minus,
+        )
+        .await
+    }
+
+    #[allow(unused_variables)]
+    async fn get_tiered_results<T>(&self, when: Vec<When<&str>>) -> Vec<When<Vec<T>>>
+    where
+        T: MySqlMarshal
+            + std::clone::Clone
+            + Eq
+            + PartialEq
+    {
+        let mut all_results: Vec<When<Vec<T>>> = vec![];
+        let minus: Option<&Vec<i32>> = None;
+
+        for tier in when {
+            let results =
+                self.get_results::<T>(
+                    tier.clone(),
+                    minus,
+                )
+                .await;
+
+            all_results.push(tier.into_when(results.clone()));
+
+            let minus = Some(
+                results
+                    .into_iter()
+                    .map(|x| x.id())
+                    .collect::<Vec<i32>>()
+            );
+        }
+
+        all_results
+    }
+
+    async fn get_results<T>(&self, when: When<&str>, minus: Option<&Vec<i32>>) -> Vec<T>
+    where
+        T: MySqlMarshal
+            + std::clone::Clone
+            + Eq
+            + PartialEq
     {
         let query = new_query_str(
             self.db_name,
             self.from,
             T::table_name().as_str(),
             self.by,
-            self.when[0].clone(),
-            self.minus,
+            when,
+            minus,
         );
 
         if let Some(q) = query {
             let query = format!(
                 "SELECT {} {}",
                 T::col_name(),
-                q.to_string()
+                q.to_string(),
             );
 
             match sqlx::query(query.as_str())
@@ -232,7 +298,7 @@ impl<'a> Query<'a> {
                 }
         }
         else {
-            return vec![]
+            vec![]
         }
     }
 }
@@ -318,33 +384,33 @@ impl<'a> QueryBuilder<'a> {
 #[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Item {
     #[serde(default)]
-    Id: i32,
+    pub Id: i32,
 
-    Name: String,
-    Description: Option<String>,
-
-    #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    Arrival: Option<NaiveDate>,
+    pub Name: String,
+    pub Description: Option<String>,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    Expiry: Option<NaiveDate>,
+    pub Arrival: Option<NaiveDate>,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    Created: Option<NaiveDate>,
+    pub Expiry: Option<NaiveDate>,
 
-    Tags: Vec<String>,
+    #[serde(deserialize_with = "deserialize_optional_naive_date")]
+    pub Created: Option<NaiveDate>,
+
+    pub Tags: Vec<String>,
 }
 
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Tag {
     #[serde(default)]
-    Id: i32,
+    pub Id: i32,
 
-    Name: String,
+    pub Name: String,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    Created: Option<NaiveDate>,
+    pub Created: Option<NaiveDate>,
 }
 
 fn deserialize_optional_naive_date<'de, D>(
@@ -369,9 +435,10 @@ where
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, Debug)]
 pub struct DbRoot {
-    Items: Vec<Item>,
+    pub Items: Vec<Item>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
 pub struct Id<T> {
     id: i32,
     phantom: std::marker::PhantomData<T>,
@@ -388,6 +455,7 @@ impl MySqlMarshal for i32 {
 
     fn col_name() -> String { String::from("`Id`") }
     fn table_name() -> String { String::new() }
+    fn id(&self) -> i32 { *self }
 }
 
 impl<T> MySqlMarshal for Id<T>
@@ -403,6 +471,7 @@ where
 
     fn col_name() -> String { i32::col_name() }
     fn table_name() -> String { T::table_name() }
+    fn id(&self) -> i32 { self.get() }
 }
 
 impl MySqlMarshal for Item {
@@ -426,6 +495,7 @@ impl MySqlMarshal for Item {
 
     fn col_name() -> String { String::from("*") }
     fn table_name() -> String { String::from("item") }
+    fn id(&self) -> i32 { self.Id }
 }
 
 impl MySqlMarshal for Tag {
@@ -441,6 +511,7 @@ impl MySqlMarshal for Tag {
 
     fn col_name() -> String { String::from("*") }
     fn table_name() -> String { String::from("tag") }
+    fn id(&self) -> i32 { self.Id }
 }
 
 fn string_to_dbrow(input: &Option<String>) -> String {
@@ -701,8 +772,139 @@ pub mod tests {
     use tokio_test;
     use crate::mydb;
 
+    fn exclude<T: std::clone::Clone>(
+        list: Vec<T>,
+        minus: Vec<i32>
+    ) -> Option<Vec<T>> {
+        if minus.len() == 0 {
+            return None;
+        }
+
+        Some(
+            list.into_iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    // (karlr 2024_02_15)
+                    // ``&((*index as i32) + 1)`` !!!?
+                    // I really feel like I shouldn't have to do this.
+                    !minus.contains(&((*index as i32) + 1))
+                })
+                .map(|(_, value)| value.clone())
+                .collect::<Vec<T>>()
+        )
+    }
+
+    fn get_actual_searches(
+        root: &DbRoot,
+        needle: &str,
+    ) -> (Vec<Item>, Vec<Item>, Vec<Item>) {
+        let equals = root.Items
+            .clone()
+            .into_iter()
+            .filter(|x| x.Name == needle)
+            .collect::<Vec<Item>>();
+
+        let minus = equals
+            .clone()
+            .into_iter()
+            .map(|x| x.Id)
+            .collect::<Vec<i32>>();
+
+        let likes = root.Items
+            .clone()
+            .into_iter()
+            .filter(|x| x.Name.starts_with(needle))
+            .collect::<Vec<Item>>();
+
+        let likes = match exclude(likes.clone(), minus.clone()) {
+            Some(list) => list,
+            None => likes,
+        };
+
+        let minus = likes
+            .clone()
+            .into_iter()
+            .map(|x| x.Id)
+            .collect::<Vec<i32>>();
+
+        let matches = root.Items
+            .clone()
+            .into_iter()
+            .filter(|x| regex::Regex::new(needle)
+                .unwrap()
+                .is_match(&x.Name)
+            )
+            .collect::<Vec<Item>>();
+
+        let matches = match exclude(matches.clone(), minus.clone()) {
+            Some(list) => list,
+            None => matches,
+        };
+
+        (equals, likes, matches)
+    }
+
+    fn get_zip<T: std::clone::Clone>(
+        first: Vec<T>,
+        secnd: Vec<T>
+    ) -> Vec<(T, T)> {
+        first
+            .iter()
+            .cloned()
+            .zip(secnd
+                .iter()
+                .cloned()
+            )
+            .collect::<Vec<(T, T)>>()
+    }
+
+    async fn test_three_tiered_search(
+        pool: &sqlx::mysql::MySqlPool,
+        from: &str,
+        by: &str,
+        needle: &str,
+    ) {
+        let json = std::fs::read_to_string(&ITEM_JSON_PATH)
+            .expect(&format!("Error: Failed to find path '{}'", ITEM_JSON_PATH));
+
+        let root: DbRoot = serde_json::from_str(&json)
+            .unwrap();
+
+        let (equals, likes, matches) = get_actual_searches(&root, needle);
+
+        let actual: Vec<When<Vec<Item>>> =
+            mydb::Query::builder(&pool)
+                .db_name(mydb::DB)
+                .from(from)
+                .by(by)
+                .when(&vec![
+                    When::Equal("?"),
+                    When::Like("?"),
+                    When::Match("?"),
+                ])
+                .sentinel(needle)
+                .build()
+                .to_tiers::<Item>()
+                .await;
+
+        assert_ne!(actual.len(), 0);
+
+        for when in actual {
+            let (actual, expected) = match when {
+                When::Equal(list) => (list, equals.clone()),
+                When::Like(list) => (list, likes.clone()),
+                When::Match(list) => (list, matches.clone()),
+                _ => { continue; },
+            };
+
+            for (actual, expected) in get_zip(actual, expected) {
+                assert_eq!(actual.Name, expected.Name);
+            }
+        }
+    }
+
     #[test]
-    pub fn it_works() {
+    pub fn items_by_tagname_succeeds() {
         let opts = sqlx::mysql::MySqlConnectOptions::new()
             .host(mydb::HOST)
             .username(mydb::USER)
@@ -713,30 +915,17 @@ pub mod tests {
 
         tokio_test::block_on(async {
             if let Ok((pool, root)) = reset_db(&opts).await {
-                let finance_items: Vec<Item> = root.Items
+                let expected: Vec<Item> = root.Items
                     .into_iter()
                     .filter(|x| x.Name.starts_with("Finance"))
                     .collect();
 
-                let finance_items =
-                    if minus.len() > 0 {
-                        finance_items
-                            .into_iter()
-                            .enumerate()
-                            .filter(|(index, _)| {
-                                // (karlr 2024_02_15)
-                                // ``&((*index as i32) + 1)`` !!!?
-                                // I really feel like I shouldn't have to do this.
-                                !minus.contains(&((*index as i32) + 1))
-                            })
-                            .map(|(_, value)| value)
-                            .collect::<Vec<Item>>()
-                    }
-                    else {
-                        finance_items
-                    };
+                let expected = match exclude(expected.clone(), minus.clone()) {
+                    Some(list) => list,
+                    None => expected,
+                };
 
-                let queried_items = Query::builder(&pool)
+                let actual = Query::builder(&pool)
                     .db_name(&mydb::DB)
                     .from("tag")
                     .by("name")
@@ -747,13 +936,38 @@ pub mod tests {
                     .to_complete_items()
                     .await;
 
-                assert_ne!(queried_items.len(), 0);
+                assert_ne!(actual.len(), 0);
 
-                for (index, item) in queried_items
+                for (index, item) in actual
                     .iter()
                     .enumerate()
                 {
-                    assert_eq!(*item, finance_items[index]);
+                    assert_eq!(*item, expected[index]);
+                }
+            }
+        });
+    }
+
+    #[test]
+    pub fn three_tiered_search_items_by_name_succeeds() {
+        let opts = sqlx::mysql::MySqlConnectOptions::new()
+            .host(mydb::HOST)
+            .username(mydb::USER)
+            .password(mydb::PASS)
+            .database(mydb::DB);
+
+        let needles: Vec<&str> = vec![
+            "est uan sin ter",
+            "uan sin ter ius",
+        ];
+
+        tokio_test::block_on(async {
+            if let Ok(pool) = MySqlPool::connect_with(opts.to_owned())
+                .await
+            {
+                for needle in needles {
+                    test_three_tiered_search(&pool, "item", "name", needle)
+                        .await;
                 }
             }
         });
