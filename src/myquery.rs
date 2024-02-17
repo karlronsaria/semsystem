@@ -16,7 +16,61 @@ pub enum When<T: std::clone::Clone> {
     Like(T),
     Match(T),
     Approx(T),
+    Less(T),
+    Greater(T),
+    AtMost(T),
+    AtLeast(T),
     Other(T),
+}
+
+pub trait QueryComparable:
+    std::clone::Clone
+    + ToString
+    + Default
+{
+    fn to_sql_needle(&self) -> String;
+}
+
+impl QueryComparable for String {
+    fn to_sql_needle(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl QueryComparable for i32 {
+    fn to_sql_needle(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl QueryComparable for NaiveDate {
+    fn to_sql_needle(&self) -> String {
+        dbstring::date_to_dbrow(&Some(*self), DT_FORMAT)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Needle<T>
+where
+    T: std::clone::Clone
+        + ToString
+        + QueryComparable
+{
+    Or(Vec<T>),
+    And(Vec<T>),
+    Only(T),
+}
+
+impl<T> Default for Needle<T>
+where
+    T: Default
+        + std::clone::Clone
+        + std::fmt::Display
+        + QueryComparable
+{
+    fn default() -> Needle<T> {
+        Needle::<T>::Only(T::default())
+    }
 }
 
 impl<T: std::clone::Clone> When<T> {
@@ -26,6 +80,10 @@ impl<T: std::clone::Clone> When<T> {
             When::Like(_) => When::Like(to),
             When::Match(_) => When::Match(to),
             When::Approx(_) => When::Approx(to),
+            When::Less(_) => When::Less(to),
+            When::Greater(_) => When::Greater(to),
+            When::AtMost(_) => When::AtMost(to),
+            When::AtLeast(_) => When::AtLeast(to),
             When::Other(_) => When::Other(to),
         }
     }
@@ -82,6 +140,10 @@ fn new_query_str<'a>(
 
             return None;
         },
+        When::Less((x, y)) => (x.to_string(), format!("< ({})", y)),
+        When::Greater((x, y)) => (x.to_string(), format!("> ({})", y)),
+        When::AtMost((x, y)) => (x.to_string(), format!("<= ({})", y)),
+        When::AtLeast((x, y)) => (x.to_string(), format!(">= ({})", y)),
         When::Other((x, y)) => (x.to_string(), y.to_string()),
     };
 
@@ -162,7 +224,7 @@ pub struct Query<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
     when: Vec<When<(&'a str, &'a str)>>,
-    sentinel: String,
+    needle: String,
     minus: Option<&'a Vec<i32>>,
 }
 
@@ -175,7 +237,7 @@ impl<'a> Query<'a> {
         let tags = Query::builder(self.pool)
             .from("item")
             .when(&vec![When::Equal(("id", "?"))])
-            .sentinel(item.Id)
+            .needle(item.Id)
             .build()
             .to::<Tag>()
             .await
@@ -282,7 +344,7 @@ impl<'a> Query<'a> {
             );
 
             match sqlx::query(query.as_str())
-                .bind(self.sentinel.clone())
+                .bind(self.needle.clone())
                 .fetch_all(self.pool)
                 .await {
                     Err(msg) => {
@@ -306,7 +368,7 @@ pub struct QueryBuilder<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
     when: Vec<When<(&'a str, &'a str)>>,
-    sentinel: String,
+    needle: String,
     minus: Option<&'a Vec<i32>>,
 }
 
@@ -318,7 +380,7 @@ impl<'a> QueryBuilder<'a> {
             pool: pool,
             from: Self::DEFAULT_STR,
             when: vec![When::<(&str, &str)>::default()],
-            sentinel: Self::DEFAULT_STR.to_string(),
+            needle: Self::DEFAULT_STR.to_string(),
             minus: None,
         }
     }
@@ -338,11 +400,11 @@ impl<'a> QueryBuilder<'a> {
         self
     }
 
-    pub fn sentinel<T>(&'a mut self, sentinel: T) -> &'a mut Self
+    pub fn needle<T>(&'a mut self, needle: T) -> &'a mut Self
     where
         T: ToString,
     {
-        self.sentinel = sentinel.to_string();
+        self.needle = needle.to_string();
         self
     }
 
@@ -356,7 +418,7 @@ impl<'a> QueryBuilder<'a> {
             pool: self.pool,
             from: self.from,
             when: self.when.clone(),
-            sentinel: self.sentinel.clone(),
+            needle: self.needle.clone(),
             minus: self.minus.clone(),
         }
     }
@@ -865,7 +927,7 @@ pub mod tests {
                     When::Like((by, "?")),
                     When::Match((by, "?")),
                 ])
-                .sentinel(needle)
+                .needle(needle)
                 .build()
                 .to_tiers::<Item>()
                 .await;
@@ -911,7 +973,7 @@ pub mod tests {
                 let actual = Query::builder(&pool)
                     .from("tag")
                     .when(&vec![When::Equal(("name", "?"))])
-                    .sentinel("finance")
+                    .needle("finance")
                     .minus(Some(&minus))
                     .build()
                     .to_complete_items()

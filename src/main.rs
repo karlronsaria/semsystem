@@ -3,7 +3,8 @@ use crate::myquery::*;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let needle = "est uan sin ter";
+    let needle_1 = "est uan sin ter";
+    let needle_2 = "uan sin ter ius";
 
     let opts = sqlx::mysql::MySqlConnectOptions::new()
         .host(HOST)
@@ -17,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
     for id in Query::builder(&pool)
         .from("tag")
         .when(&vec![When::Equal(("name", "?"))])
-        .sentinel("claim")
+        .needle("claim")
         .build()
         .to::<Id::<Item>>()
         .await
@@ -32,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
             When::Like(("name", "?")),
             When::Match(("name", "?")),
         ])
-        .sentinel(needle)
+        .needle(needle_1)
         .build()
         .to_tiers::<Item>()
         .await
@@ -47,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
             When::Like(("name", "?")),
             When::Match(("name", "?")),
         ])
-        .sentinel("uan sin ter ius")
+        .needle(needle_2)
         .build()
         .to_tiers::<Item>()
         .await
@@ -60,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
             root.Items
                 .clone()
                 .into_iter()
-                .filter(|x| x.Name == needle)
+                .filter(|x| x.Name == needle_1)
                 .collect::<Vec<Item>>()
         ),
 
@@ -68,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
             root.Items
                 .clone()
                 .into_iter()
-                .filter(|x| x.Name.starts_with(needle))
+                .filter(|x| x.Name.starts_with(needle_1))
                 .collect::<Vec<Item>>()
         ),
 
@@ -76,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
             root.Items
                 .clone()
                 .into_iter()
-                .filter(|x| regex::Regex::new(needle)
+                .filter(|x| regex::Regex::new(needle_1)
                     .unwrap()
                     .is_match(&x.Name)
                 )
