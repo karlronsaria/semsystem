@@ -37,6 +37,12 @@ impl<'a> Default for When<&'a str> {
     }
 }
 
+impl<'a> Default for When<(&'a str, &'a str)> {
+    fn default() -> When<(&'a str, &'a str)> {
+        When::<(&'a str, &'a str)>::Equal(("`Id`", "?"))
+    }
+}
+
 #[derive(Debug, Default)]
 struct QueryString {
     from: String,
@@ -60,17 +66,15 @@ WHERE
 }
 
 fn new_query_str<'a>(
-    db: &'a str,
     from: &'a str,
     to: &'a str,
-    by: &'a str,
-    when: When<&'a str>,
+    when: When<(&'a str, &'a str)>,
     minus: Option<&'a Vec<i32>>,
 ) -> Option<QueryString> {
-    let search_type = match when {
-        When::Equal(x) => format!("= ({})", x),
-        When::Like(x) => format!("LIKE CONCAT({}, '%')", x),
-        When::Match(x) => format!("RLIKE ({})", x),
+    let (by, search_type) = match when {
+        When::Equal((x, y)) => (x.to_string(), format!("= ({})", y)),
+        When::Like((x, y)) => (x.to_string(), format!("LIKE CONCAT({}, '%')", y)),
+        When::Match((x, y)) => (x.to_string(), format!("RLIKE ({})", y)),
         When::Approx(_) => {
             eprintln!(
                 "Error: new_query_str: Fuzzy search not yet implemented",
@@ -78,7 +82,7 @@ fn new_query_str<'a>(
 
             return None;
         },
-        When::Other(x) => x.to_string(),
+        When::Other((x, y)) => (x.to_string(), y.to_string()),
     };
 
     let to = if to.is_empty() { from } else { to };
@@ -86,7 +90,7 @@ fn new_query_str<'a>(
     let query =
         if to == from {
             QueryString {
-                from: format!("`{db}`.`{to}`"),
+                from: format!("`{to}`"),
                 where_clause: format!("`{by}` {search_type}"),
             }
         }
@@ -108,7 +112,7 @@ fn new_query_str<'a>(
                 };
 
             let from_table_str: String = format!(
-                "`{db}`.`{to}` LEFT JOIN `{db}`.`item_has_{other_table}` ON `id` = `{to}_id`"
+                "`{to}` LEFT JOIN `item_has_{other_table}` ON `id` = `{to}_id`"
             );
 
             QueryString {
@@ -156,10 +160,8 @@ pub trait MySqlMarshal {
 #[derive(Clone)]
 pub struct Query<'a> {
     pool: &'a MySqlPool,
-    db_name: &'a str,
     from: &'a str,
-    by: &'a str,
-    when: Vec<When<&'a str>>,
+    when: Vec<When<(&'a str, &'a str)>>,
     sentinel: String,
     minus: Option<&'a Vec<i32>>,
 }
@@ -171,9 +173,8 @@ impl<'a> Query<'a> {
 
     pub async fn to_complete_item(&self, item: Item) -> Item {
         let tags = Query::builder(self.pool)
-            .db_name(self.db_name)
             .from("item")
-            .by("id")
+            .when(&vec![When::Equal(("id", "?"))])
             .sentinel(item.Id)
             .build()
             .to::<Tag>()
@@ -228,7 +229,7 @@ impl<'a> Query<'a> {
     }
 
     #[allow(unused_variables)]
-    async fn get_tiered_results<T>(&self, when: Vec<When<&str>>) -> Vec<When<Vec<T>>>
+    async fn get_tiered_results<T>(&self, when: Vec<When<(&str, &str)>>) -> Vec<When<Vec<T>>>
     where
         T: MySqlMarshal
             + std::clone::Clone
@@ -259,7 +260,7 @@ impl<'a> Query<'a> {
         all_results
     }
 
-    async fn get_results<T>(&self, when: When<&str>, minus: Option<&Vec<i32>>) -> Vec<T>
+    async fn get_results<T>(&self, when: When<(&str, &str)>, minus: Option<&Vec<i32>>) -> Vec<T>
     where
         T: MySqlMarshal
             + std::clone::Clone
@@ -267,10 +268,8 @@ impl<'a> Query<'a> {
             + PartialEq
     {
         let query = new_query_str(
-            self.db_name,
             self.from,
             T::table_name().as_str(),
-            self.by,
             when,
             minus,
         );
@@ -305,25 +304,20 @@ impl<'a> Query<'a> {
 
 pub struct QueryBuilder<'a> {
     pool: &'a MySqlPool,
-    db_name: &'a str,
     from: &'a str,
-    by: &'a str,
-    when: Vec<When<&'a str>>,
+    when: Vec<When<(&'a str, &'a str)>>,
     sentinel: String,
     minus: Option<&'a Vec<i32>>,
 }
 
 impl<'a> QueryBuilder<'a> {
-    pub const DEFAULT_WHEN: When<&'static str> = When::Equal("?");
     pub const DEFAULT_STR: &'static str = "";
 
     pub fn new(pool: &'a MySqlPool) -> Self {
         QueryBuilder {
             pool: pool,
-            db_name: Self::DEFAULT_STR,
             from: Self::DEFAULT_STR,
-            by: Self::DEFAULT_STR,
-            when: vec![Self::DEFAULT_WHEN],
+            when: vec![When::<(&str, &str)>::default()],
             sentinel: Self::DEFAULT_STR.to_string(),
             minus: None,
         }
@@ -334,22 +328,12 @@ impl<'a> QueryBuilder<'a> {
         self
     }
 
-    pub fn db_name(&'a mut self, db_name: &'a str) -> &'a mut Self {
-        self.db_name = db_name;
-        self
-    }
-
     pub fn from(&'a mut self, from: &'a str) -> &'a mut Self {
         self.from = from;
         self
     }
 
-    pub fn by(&'a mut self, by: &'a str) -> &'a mut Self {
-        self.by = by;
-        self
-    }
-
-    pub fn when(&'a mut self, when: &'a Vec<When<&'a str>>) -> &'a mut Self {
+    pub fn when(&'a mut self, when: &'a Vec<When<(&'a str, &'a str)>>) -> &'a mut Self {
         self.when = when.clone();
         self
     }
@@ -370,9 +354,7 @@ impl<'a> QueryBuilder<'a> {
     pub fn build(&'a self) -> Query<'a> {
         Query {
             pool: self.pool,
-            db_name: self.db_name,
             from: self.from,
-            by: self.by,
             when: self.when.clone(),
             sentinel: self.sentinel.clone(),
             minus: self.minus.clone(),
@@ -514,44 +496,48 @@ impl MySqlMarshal for Tag {
     fn id(&self) -> i32 { self.Id }
 }
 
-fn string_to_dbrow(input: &Option<String>) -> String {
-    match input {
-        Some(s) => String::from(format!("'{}'", s)),
-        None => String::from("NULL"),
+mod dbstring {
+    use super::*;
+
+    pub fn string_to_dbrow(input: &Option<String>) -> String {
+        match input {
+            Some(s) => String::from(format!("'{}'", s)),
+            None => String::from("NULL"),
+        }
     }
-}
 
-fn date_to_dbrow(date: &Option<NaiveDate>, format: &str) -> String {
-    match date {
-        Some(s) => String::from(
-            format!(
-                "STR_TO_DATE('{}', '{}')",
-                s.format(format).to_string(),
-                format,
-            )
-        ),
+    pub fn date_to_dbrow(date: &Option<NaiveDate>, format: &str) -> String {
+        match date {
+            Some(s) => String::from(
+                format!(
+                    "STR_TO_DATE('{}', '{}')",
+                    s.format(format).to_string(),
+                    format,
+                )
+            ),
 
-        None => String::from("NULL"),
+            None => String::from("NULL"),
+        }
     }
-}
 
-fn myitem_to_dbrow(item: &Item) -> String {
-    vec![
-        format!("'{}'", item.Name),
-        string_to_dbrow(&item.Description),
-        date_to_dbrow(&item.Arrival, DT_FORMAT),
-        date_to_dbrow(&item.Expiry, DT_FORMAT),
-        date_to_dbrow(&item.Created, DT_FORMAT),
-    ]
-    .join(",\n    ")
-}
+    pub fn myitem_to_dbrow(item: &Item) -> String {
+        vec![
+            format!("'{}'", item.Name),
+            string_to_dbrow(&item.Description),
+            date_to_dbrow(&item.Arrival, DT_FORMAT),
+            date_to_dbrow(&item.Expiry, DT_FORMAT),
+            date_to_dbrow(&item.Created, DT_FORMAT),
+        ]
+        .join(",\n    ")
+    }
 
-fn mytag_to_dbrow(tag: &Tag) -> String {
-    vec![
-        format!("'{}'", tag.Name),
-        date_to_dbrow(&tag.Created, DT_FORMAT),
-    ]
-    .join(",\n    ")
+    pub fn mytag_to_dbrow(tag: &Tag) -> String {
+        vec![
+            format!("'{}'", tag.Name),
+            date_to_dbrow(&tag.Created, DT_FORMAT),
+        ]
+        .join(",\n    ")
+    }
 }
 
 fn myitems_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
@@ -571,7 +557,7 @@ INSERT INTO `{}`.`Item` (
         items
             .iter()
             .map(|x|
-                myitem_to_dbrow(x)
+                dbstring::myitem_to_dbrow(x)
             )
             .collect::<Vec<String>>()
             .join("\n), (\n    "),
@@ -612,7 +598,7 @@ INSERT IGNORE INTO `{}`.`Tag` (
         tags
             .iter()
             .map(|(_, tag)|
-                mytag_to_dbrow(&tag)
+                dbstring::mytag_to_dbrow(&tag)
             )
             .collect::<Vec<String>>()
             .join("\n), (\n    "),
@@ -709,21 +695,21 @@ pub async fn reset_db(
             });
     }
 
-    _ = sqlx::query(&myitems_to_dbinsert("mydb", &root.Items))
+    _ = sqlx::query(&myitems_to_dbinsert(DB, &root.Items))
         .execute(&pool)
         .await
         .map_err(|err| {
             eprintln!("Item table insert failed. Error: {}", err);
         });
 
-    _ = sqlx::query(&mytags_to_dbinsert("mydb", &root.Items))
+    _ = sqlx::query(&mytags_to_dbinsert(DB, &root.Items))
         .execute(&pool)
         .await
         .map_err(|err| {
             eprintln!("Item table insert failed. Error: {}", err);
         });
 
-    _ = add_list_itemhastag(&pool, "mydb", &root.Items)
+    _ = add_list_itemhastag(&pool, DB, &root.Items)
         .await?;
 
     Ok((pool, root))
@@ -770,7 +756,6 @@ ON DUPLICATE KEY UPDATE
 pub mod tests {
     use super::*;
     use tokio_test;
-    use crate::mydb;
 
     fn exclude<T: std::clone::Clone>(
         list: Vec<T>,
@@ -873,14 +858,12 @@ pub mod tests {
         let (equals, likes, matches) = get_actual_searches(&root, needle);
 
         let actual: Vec<When<Vec<Item>>> =
-            mydb::Query::builder(&pool)
-                .db_name(mydb::DB)
+            Query::builder(&pool)
                 .from(from)
-                .by(by)
                 .when(&vec![
-                    When::Equal("?"),
-                    When::Like("?"),
-                    When::Match("?"),
+                    When::Equal((by, "?")),
+                    When::Like((by, "?")),
+                    When::Match((by, "?")),
                 ])
                 .sentinel(needle)
                 .build()
@@ -906,10 +889,10 @@ pub mod tests {
     #[test]
     pub fn items_by_tagname_succeeds() {
         let opts = sqlx::mysql::MySqlConnectOptions::new()
-            .host(mydb::HOST)
-            .username(mydb::USER)
-            .password(mydb::PASS)
-            .database(mydb::DB);
+            .host(HOST)
+            .username(USER)
+            .password(PASS)
+            .database(DB);
 
         let minus: Vec<i32> = vec![2, 4];
 
@@ -926,10 +909,8 @@ pub mod tests {
                 };
 
                 let actual = Query::builder(&pool)
-                    .db_name(&mydb::DB)
                     .from("tag")
-                    .by("name")
-                    .when(&vec![When::Equal("?")])
+                    .when(&vec![When::Equal(("name", "?"))])
                     .sentinel("finance")
                     .minus(Some(&minus))
                     .build()
@@ -951,10 +932,10 @@ pub mod tests {
     #[test]
     pub fn three_tiered_search_items_by_name_succeeds() {
         let opts = sqlx::mysql::MySqlConnectOptions::new()
-            .host(mydb::HOST)
-            .username(mydb::USER)
-            .password(mydb::PASS)
-            .database(mydb::DB);
+            .host(HOST)
+            .username(USER)
+            .password(PASS)
+            .database(DB);
 
         let needles: Vec<&str> = vec![
             "est uan sin ter",

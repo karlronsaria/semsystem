@@ -1,97 +1,90 @@
-pub mod mydb;
+pub mod myquery;
+use crate::myquery::*;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let opts = sqlx::mysql::MySqlConnectOptions::new()
-        .host(mydb::HOST)
-        .username(mydb::USER)
-        .password(mydb::PASS)
-        .database(mydb::DB);
+    let needle = "est uan sin ter";
 
-    let (pool, root) = mydb::reset_db(&opts)
+    let opts = sqlx::mysql::MySqlConnectOptions::new()
+        .host(HOST)
+        .username(USER)
+        .password(PASS)
+        .database(DB);
+
+    let (pool, root) = reset_db(&opts)
         .await?;
 
-    for id in mydb::Query::builder(&pool)
-        .db_name(mydb::DB)
+    for id in Query::builder(&pool)
         .from("tag")
-        .by("name")
-        .when(&vec![mydb::When::Equal("?")])
+        .when(&vec![When::Equal(("name", "?"))])
         .sentinel("claim")
         .build()
-        .to::<mydb::Id::<mydb::Item>>()
+        .to::<Id::<Item>>()
         .await
         .into_iter() {
             println!("Id: {}", id.get());
         }
 
-    for tier in mydb::Query::builder(&pool)
-        .db_name(mydb::DB)
+    for tier in Query::builder(&pool)
         .from("item")
-        .by("name")
         .when(&vec![
-            mydb::When::Equal("?"),
-            mydb::When::Like("?"),
-            mydb::When::Match("?"),
+            When::Equal(("name", "?")),
+            When::Like(("name", "?")),
+            When::Match(("name", "?")),
         ])
-        .sentinel("est uan sin ter")
+        .sentinel(needle)
         .build()
-        .to_tiers::<mydb::Item>()
+        .to_tiers::<Item>()
         .await
         .into_iter() {
             println!("{:#?}", tier);
         }
 
-    for tier in mydb::Query::builder(&pool)
-        .db_name(mydb::DB)
+    for tier in Query::builder(&pool)
         .from("item")
-        .by("name")
         .when(&vec![
-            mydb::When::Equal("?"),
-            mydb::When::Like("?"),
-            mydb::When::Match("?"),
+            When::Equal(("name", "?")),
+            When::Like(("name", "?")),
+            When::Match(("name", "?")),
         ])
         .sentinel("uan sin ter ius")
         .build()
-        .to_tiers::<mydb::Item>()
+        .to_tiers::<Item>()
         .await
         .into_iter() {
             println!("{:#?}", tier);
         }
 
+    let expected: Vec<When<Vec<Item>>> = vec![
+        When::Equal(
+            root.Items
+                .clone()
+                .into_iter()
+                .filter(|x| x.Name == needle)
+                .collect::<Vec<Item>>()
+        ),
 
-        let expected: Vec<mydb::When<Vec<mydb::Item>>> = vec![
-            mydb::When::Equal(
-                root.Items
-                    .clone()
-                    .into_iter()
-                    .filter(|x| x.Name == "est uan sin ter")
-                    .collect::<Vec<mydb::Item>>()
-            ),
+        When::Like(
+            root.Items
+                .clone()
+                .into_iter()
+                .filter(|x| x.Name.starts_with(needle))
+                .collect::<Vec<Item>>()
+        ),
 
-            mydb::When::Like(
-                root.Items
-                    .clone()
-                    .into_iter()
-                    .filter(|x| x.Name.starts_with("est uan sin ter"))
-                    .collect::<Vec<mydb::Item>>()
-            ),
-
-            mydb::When::Match(
-                root.Items
-                    .clone()
-                    .into_iter()
-                    .filter(|x| regex::Regex::new(r"est uan sin ter")
-                        .unwrap()
-                        .is_match(&x.Name)
-                    )
-                    .collect::<Vec<mydb::Item>>()
-            ),
-        ];
+        When::Match(
+            root.Items
+                .clone()
+                .into_iter()
+                .filter(|x| regex::Regex::new(needle)
+                    .unwrap()
+                    .is_match(&x.Name)
+                )
+                .collect::<Vec<Item>>()
+        ),
+    ];
 
     println!("{:#?}", expected);
-
-
-
     Ok(())
 }
 

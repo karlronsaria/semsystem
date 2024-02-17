@@ -1,56 +1,83 @@
 # todo
-
-- add
-    - item
-    - tag
-    - date
-    - tag to item
-    - date to item
-- update
-    - item
-    - CANNOT BE UPDATED
+- refactor
+    - (by, when(search)) to when(by, search)
+- feat
+    - and|or
+    - add
+        - item
+            - [(-id, ..., tag_names?)] ->
+            - INSERT IGNORE
+        - tag to item
+            - [(item_id, tag_names)] ->
+            - INSERT IGNORE
+        - date to item
+            - [(item_id, dates)] ->
+            - INSERT IGNORE
+        - CANNOT BE ADDED
+            - tag
+            - date
+    - update
+        - item
+            - [(id, ..., tag_names?)] ->
+            - UPDATE IGNORE
+        - CANNOT BE UPDATED
+            - tag
+            - date
+    - remove (by id only)
+        - item
+            - id ->
+            - DELETE IGNORE
         - tag
+            - id ->
+            - DELETE IGNORE
         - date
-- remove (by id only)
-    - item
-    - tag
-    - date
-    - tag from item
-    - date from item
-- select
-    - items
-        - by name
-            - tables
-                - item
-            - clauses
+            - id ->
+            - DELETE IGNORE
+        - tag from item
+            - [(id, id)] ->
+            - DELETE IGNORE
+        - date from item
+            - [(id, id)] ->
+            - DELETE IGNORE
+    - select
+        - dates
+            - before
+            - after
+        - items
+            - by name
+                - tables
+                    - item
+                - clauses
+                    - exact
+                        - name = ?
+                    - substring
+                        - name like ?
+                    - pattern
+                        - name match ?
+                    - fuzzy
+                        - ???
+            - by tag
+                - tables
+                    - item
+                    - item_has_tag
+                - clauses
+                    - exact
+                        - tag_id = (select id from tag where name = ?)
+                    - substring
+                        - tag_id = (select id from tag where name like ?)
+                    - pattern
+                        - tag_id = (select id from tag where name match ?)
+                    - fuzzy
+                        - ???
+            - by date
+        - tags
+            - by name
                 - exact
-                    - name = ?
                 - substring
-                    - name like ?
                 - pattern
-                    - name match ?
-                - fuzzy
-                    - ???
-        - by tag
-            - tables
-                - item
-                - item_has_tag
-            - clauses
+            - by item
                 - exact
-                    - tag_id = (select id from tag where name = ?)
                 - substring
-                    - tag_id = (select id from tag where name like ?)
                 - pattern
-                    - tag_id = (select id from tag where name match ?)
-                - fuzzy
-                    - ???
-    - tags
-        - by name
-            - exact
-            - substring
-            - pattern
-        - by item
-            - exact
-            - substring
-            - pattern
+            - by date
 
