@@ -156,7 +156,10 @@ pub trait MySqlMarshal {
 pub struct Query<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
+
+    /// [ SearchType ( Haystack ) ]
     when: Vec<When<&'a str>>,
+
     needle: String,
     minus: Option<&'a Vec<i32>>,
     aggregate: Agg,
@@ -334,7 +337,10 @@ impl<'a> Query<'a> {
 pub struct QueryBuilder<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
+
+    /// [ SearchType ( Haystack ) ]
     when: Vec<When<&'a str>>,
+
     needle: String,
     minus: Option<&'a Vec<i32>>,
     aggregate: Agg,
