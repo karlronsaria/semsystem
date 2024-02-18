@@ -23,56 +23,6 @@ pub enum When<T: std::clone::Clone> {
     Other(T),
 }
 
-pub trait QueryComparable:
-    std::clone::Clone
-    + ToString
-    + Default
-{
-    fn to_sql_needle(&self) -> String;
-}
-
-impl QueryComparable for String {
-    fn to_sql_needle(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl QueryComparable for i32 {
-    fn to_sql_needle(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl QueryComparable for NaiveDate {
-    fn to_sql_needle(&self) -> String {
-        dbstring::date_to_dbrow(&Some(*self), DT_FORMAT)
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum Needle<T>
-where
-    T: std::clone::Clone
-        + ToString
-        + QueryComparable
-{
-    Or(Vec<T>),
-    And(Vec<T>),
-    Only(T),
-}
-
-impl<T> Default for Needle<T>
-where
-    T: Default
-        + std::clone::Clone
-        + std::fmt::Display
-        + QueryComparable
-{
-    fn default() -> Needle<T> {
-        Needle::<T>::Only(T::default())
-    }
-}
-
 impl<T: std::clone::Clone> When<T> {
     fn into_when<R: std::clone::Clone>(&self, to: R) -> When<R> {
         match self {
@@ -95,44 +45,22 @@ impl<'a> Default for When<&'a str> {
     }
 }
 
-impl<'a> Default for When<(&'a str, &'a str)> {
-    fn default() -> When<(&'a str, &'a str)> {
-        When::<(&'a str, &'a str)>::Equal(("`Id`", "?"))
-    }
-}
-
-#[derive(Debug, Default)]
-struct QueryString {
-    from: String,
-    where_clause: String,
-}
-
-impl ToString for QueryString {
-    fn to_string(&self) -> String {
-        format!(
-            r#"
-FROM
-    {}
-WHERE
-    {}
-;
-            "#,
-            self.from,
-            self.where_clause,
-        )
-    }
+#[derive(Clone)]
+pub enum Agg {
+    Union,
+    Intersect,
 }
 
 fn new_query_str<'a>(
     from: &'a str,
     to: &'a str,
-    when: When<(&'a str, &'a str)>,
+    when: When<&'a str>,
     minus: Option<&'a Vec<i32>>,
-) -> Option<QueryString> {
+) -> Option<(String, String, String)> {
     let (by, search_type) = match when {
-        When::Equal((x, y)) => (x.to_string(), format!("= ({})", y)),
-        When::Like((x, y)) => (x.to_string(), format!("LIKE CONCAT({}, '%')", y)),
-        When::Match((x, y)) => (x.to_string(), format!("RLIKE ({})", y)),
+        When::Equal(x) => (x.to_string(), String::from("REGEXP CONCAT('^', ?, '$')")),
+        When::Like(x) => (x.to_string(), String::from("REGEXP CONCAT('^', ?)")),
+        When::Match(x) => (x.to_string(), String::from("REGEXP (?)")),
         When::Approx(_) => {
             eprintln!(
                 "Error: new_query_str: Fuzzy search not yet implemented",
@@ -140,21 +68,24 @@ fn new_query_str<'a>(
 
             return None;
         },
-        When::Less((x, y)) => (x.to_string(), format!("< ({})", y)),
-        When::Greater((x, y)) => (x.to_string(), format!("> ({})", y)),
-        When::AtMost((x, y)) => (x.to_string(), format!("<= ({})", y)),
-        When::AtLeast((x, y)) => (x.to_string(), format!(">= ({})", y)),
-        When::Other((x, y)) => (x.to_string(), y.to_string()),
+        When::Less(x) => (x.to_string(), String::from("< (?)")),
+        When::Greater(x) => (x.to_string(), String::from("> (?)")),
+        When::AtMost(x) => (x.to_string(), String::from("<= (?)")),
+        When::AtLeast(x) => (x.to_string(), String::from(">= (?)")),
+        When::Other(_) => {
+            eprintln!(
+                "Error: new_query_str: Other search not yet implemented",
+            );
+
+            return None;
+        },
     };
 
     let to = if to.is_empty() { from } else { to };
 
     let query =
         if to == from {
-            QueryString {
-                from: format!("`{to}`"),
-                where_clause: format!("`{by}` {search_type}"),
-            }
+            (format!("`{to}`"), format!("`{by}` {search_type}"), String::from("`id`"))
         }
         else {
             let other_table: &'a str =
@@ -173,17 +104,20 @@ fn new_query_str<'a>(
                     return None;
                 };
 
-            let from_table_str: String = format!(
-                "`{to}` LEFT JOIN `item_has_{other_table}` ON `id` = `{to}_id`"
-            );
+            let from_table_str: String =
+                format!(
+                    "`{to}` LEFT JOIN `item_has_{other_table}` ON `Id` = `{to}_Id`"
+                );
 
-            QueryString {
-                from: from_table_str,
-                where_clause:
-                    format!(
-                        "`{from}_id` = (SELECT `id` FROM `{from}` WHERE `{by}` {search_type})"
-                    ),
-            }
+            (
+                from_table_str,
+                format!(
+                    "`{from}_Id` in (SELECT `Id` FROM `{from}` WHERE `{by}` {search_type})"
+                ),
+                format!(
+                    "`{from}_Id`"
+                ),
+            )
         };
 
     let query = match minus {
@@ -194,16 +128,15 @@ fn new_query_str<'a>(
                 .collect::<Vec<String>>()
                 .join(", ");
 
-            QueryString {
-                from:
-                    query.from.to_string(),
-                where_clause:
-                    format!(
-                        "{} and `{to}_id` not in ({})",
-                        query.where_clause,
-                        exclude_ids,
-                    ),
-            }
+            (
+                query.0.to_string(),
+                format!(
+                    "{} and `{to}_Id` not in ({})",
+                    query.1,
+                    exclude_ids,
+                ),
+                query.1,
+            )
         },
 
         _ => query,
@@ -223,9 +156,10 @@ pub trait MySqlMarshal {
 pub struct Query<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
-    when: Vec<When<(&'a str, &'a str)>>,
+    when: Vec<When<&'a str>>,
     needle: String,
     minus: Option<&'a Vec<i32>>,
+    aggregate: Agg,
 }
 
 impl<'a> Query<'a> {
@@ -236,7 +170,7 @@ impl<'a> Query<'a> {
     pub async fn to_complete_item(&self, item: Item) -> Item {
         let tags = Query::builder(self.pool)
             .from("item")
-            .when(&vec![When::Equal(("id", "?"))])
+            .when(&vec![When::Equal("id")])
             .needle(item.Id)
             .build()
             .to::<Tag>()
@@ -291,7 +225,7 @@ impl<'a> Query<'a> {
     }
 
     #[allow(unused_variables)]
-    async fn get_tiered_results<T>(&self, when: Vec<When<(&str, &str)>>) -> Vec<When<Vec<T>>>
+    async fn get_tiered_results<T>(&self, when: Vec<When<&str>>) -> Vec<When<Vec<T>>>
     where
         T: MySqlMarshal
             + std::clone::Clone
@@ -322,26 +256,59 @@ impl<'a> Query<'a> {
         all_results
     }
 
-    async fn get_results<T>(&self, when: When<(&str, &str)>, minus: Option<&Vec<i32>>) -> Vec<T>
+    async fn get_results<T>(
+        &self,
+        when: When<&str>,
+        minus: Option<&Vec<i32>>,
+    ) -> Vec<T>
     where
         T: MySqlMarshal
             + std::clone::Clone
             + Eq
             + PartialEq
     {
+        let to = T::table_name();
+
         let query = new_query_str(
             self.from,
-            T::table_name().as_str(),
+            to.as_str(),
             when,
             minus,
         );
 
-        if let Some(q) = query {
+        if let Some((from, where_clause, countby_col)) = query {
+            // link
+            // - url: <https://stackoverflow.com/questions/41887460/select-list-is-not-in-group-by-clause-and-contains-nonaggregated-column-inc>
+            // - retrieved: 2024_02_18
             let query = format!(
-                "SELECT {} {}",
+                r#"SELECT {} FROM `{}` WHERE `Id` IN (
+    SELECT `Id`
+    FROM
+        {}
+    WHERE
+        {}
+    GROUP BY
+        `Id`{}
+);"#,
                 T::col_name(),
-                q.to_string(),
+                to,
+                from,
+                where_clause,
+                match self.aggregate {
+                    Agg::Union => String::new(),
+                    Agg::Intersect => format!(
+                        " HAVING COUNT(DISTINCT {countby_col}) = {}",
+                        self.needle
+                            .split("|")
+                            .collect::<Vec<&str>>()
+                            .len(),
+                    ),
+                },
             );
+
+            // todo
+            println!("\n{}", query);
+            println!("? = {}\n", self.needle);
 
             match sqlx::query(query.as_str())
                 .bind(self.needle.clone())
@@ -367,9 +334,10 @@ impl<'a> Query<'a> {
 pub struct QueryBuilder<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
-    when: Vec<When<(&'a str, &'a str)>>,
+    when: Vec<When<&'a str>>,
     needle: String,
     minus: Option<&'a Vec<i32>>,
+    aggregate: Agg,
 }
 
 impl<'a> QueryBuilder<'a> {
@@ -379,9 +347,10 @@ impl<'a> QueryBuilder<'a> {
         QueryBuilder {
             pool: pool,
             from: Self::DEFAULT_STR,
-            when: vec![When::<(&str, &str)>::default()],
+            when: vec![When::<&str>::default()],
             needle: Self::DEFAULT_STR.to_string(),
             minus: None,
+            aggregate: Agg::Union,
         }
     }
 
@@ -395,7 +364,7 @@ impl<'a> QueryBuilder<'a> {
         self
     }
 
-    pub fn when(&'a mut self, when: &'a Vec<When<(&'a str, &'a str)>>) -> &'a mut Self {
+    pub fn when(&'a mut self, when: &'a Vec<When<&'a str>>) -> &'a mut Self {
         self.when = when.clone();
         self
     }
@@ -413,6 +382,11 @@ impl<'a> QueryBuilder<'a> {
         self
     }
 
+    pub fn aggregate(&'a mut self, aggregate: Agg) -> &'a mut Self {
+        self.aggregate = aggregate;
+        self
+    }
+
     pub fn build(&'a self) -> Query<'a> {
         Query {
             pool: self.pool,
@@ -420,6 +394,7 @@ impl<'a> QueryBuilder<'a> {
             when: self.when.clone(),
             needle: self.needle.clone(),
             minus: self.minus.clone(),
+            aggregate: self.aggregate.clone(),
         }
     }
 }
@@ -923,9 +898,9 @@ pub mod tests {
             Query::builder(&pool)
                 .from(from)
                 .when(&vec![
-                    When::Equal((by, "?")),
-                    When::Like((by, "?")),
-                    When::Match((by, "?")),
+                    When::Equal(by),
+                    When::Like(by),
+                    When::Match(by),
                 ])
                 .needle(needle)
                 .build()
@@ -972,7 +947,7 @@ pub mod tests {
 
                 let actual = Query::builder(&pool)
                     .from("tag")
-                    .when(&vec![When::Equal(("name", "?"))])
+                    .when(&vec![When::Equal("name")])
                     .needle("finance")
                     .minus(Some(&minus))
                     .build()
