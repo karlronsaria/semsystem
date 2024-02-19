@@ -15,59 +15,70 @@ async fn main() -> anyhow::Result<()> {
     let (pool, _) = reset_db(&opts)
         .await?;
 
-    for id in Query::builder(&pool)
-        .from("tag")
-        .when(&vec![When::Match("name")])
-        .needle("auto|claim")
-        .aggregate(Agg::Intersect)
+    for item in Query::builder(&pool)
+        .from("date")
+        .when(&vec![When::Greater("date")])
+        .needle("2022-12-31")
         .build()
-        .to::<Id::<Item>>()
+        .to::<Item>()
         .await
         .into_iter() {
-            println!("Id: {}", id.get());
+            println!("Item: {}", item.Name);
         }
 
-    for id in Query::builder(&pool)
-        .from("item")
-        .when(&vec![When::Match("name")])
-        .needle("Financ")
-        .aggregate(Agg::Intersect)
-        .build()
-        .to::<Id::<Item>>()
-        .await
-        .into_iter() {
-            println!("Id: {}", id.get());
-        }
+    // for id in Query::builder(&pool)
+    //     .from("tag")
+    //     .when(&vec![When::Match("name")])
+    //     .needle("auto|claim")
+    //     .aggregate(Agg::Intersect)
+    //     .build()
+    //     .to::<Id::<Item>>()
+    //     .await
+    //     .into_iter() {
+    //         println!("Id: {}", id.get());
+    //     }
 
-    for tier in Query::builder(&pool)
-        .from("item")
-        .when(&vec![
-            When::Equal("name"),
-            When::Like("name"),
-            When::Match("name"),
-        ])
-        .needle(needle_1)
-        .build()
-        .to_tiers::<Item>()
-        .await
-        .into_iter() {
-            println!("{:#?}", tier);
-        }
+    // for id in Query::builder(&pool)
+    //     .from("item")
+    //     .when(&vec![When::Match("name")])
+    //     .needle("Financ")
+    //     .aggregate(Agg::Intersect)
+    //     .build()
+    //     .to::<Id::<Item>>()
+    //     .await
+    //     .into_iter() {
+    //         println!("Id: {}", id.get());
+    //     }
 
-    for tier in Query::builder(&pool)
-        .from("item")
-        .when(&vec![
-            When::Equal("name"),
-            When::Like("name"),
-            When::Match("name"),
-        ])
-        .needle(needle_2)
-        .build()
-        .to_tiers::<Item>()
-        .await
-        .into_iter() {
-            println!("{:#?}", tier);
-        }
+    // for tier in Query::builder(&pool)
+    //     .from("item")
+    //     .when(&vec![
+    //         When::Equal("name"),
+    //         When::Like("name"),
+    //         When::Match("name"),
+    //     ])
+    //     .needle(needle_1)
+    //     .build()
+    //     .to_tiers::<Item>()
+    //     .await
+    //     .into_iter() {
+    //         println!("{:#?}", tier);
+    //     }
+
+    // for tier in Query::builder(&pool)
+    //     .from("item")
+    //     .when(&vec![
+    //         When::Equal("name"),
+    //         When::Like("name"),
+    //         When::Match("name"),
+    //     ])
+    //     .needle(needle_2)
+    //     .build()
+    //     .to_tiers::<Item>()
+    //     .await
+    //     .into_iter() {
+    //         println!("{:#?}", tier);
+    //     }
 
     // let expected: Vec<When<Vec<Item>>> = vec![
     //     When::Equal(

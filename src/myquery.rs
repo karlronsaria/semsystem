@@ -182,8 +182,20 @@ impl<'a> Query<'a> {
             .map(|tag| tag.Name)
             .collect::<Vec<String>>();
 
+        let dates = Query::builder(self.pool)
+            .from("item")
+            .when(&vec![When::Equal("id")])
+            .needle(item.Id)
+            .build()
+            .to::<Date>()
+            .await
+            .into_iter()
+            .map(|date| date.Date)
+            .collect::<Vec<NaiveDate>>();
+
         Item {
             Tags: tags,
+            Dates: dates,
             ..item.clone()
         }
     }
@@ -309,9 +321,9 @@ impl<'a> Query<'a> {
                 },
             );
 
-            // todo
-            println!("\n{}", query);
-            println!("? = {}\n", self.needle);
+            // // todo
+            // println!("\n{}", query);
+            // println!("? = {}\n", self.needle);
 
             match sqlx::query(query.as_str())
                 .bind(self.needle.clone())
@@ -424,6 +436,9 @@ pub struct Item {
     pub Created: Option<NaiveDate>,
 
     pub Tags: Vec<String>,
+
+    #[serde(deserialize_with = "deserialize_naive_date_vec")]
+    pub Dates: Vec<NaiveDate>,
 }
 
 #[allow(non_snake_case)]
@@ -436,6 +451,59 @@ pub struct Tag {
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
     pub Created: Option<NaiveDate>,
+}
+
+#[allow(non_snake_case)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct Date {
+    #[serde(default)]
+    pub Id: i32,
+
+    #[serde(deserialize_with = "deserialize_naive_date")]
+    pub Date: NaiveDate,
+}
+
+fn deserialize_naive_date<'de, D>(
+    deserializer: D
+) -> Result<NaiveDate, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let date_str: Option<&str> =
+        serde::Deserialize::deserialize(deserializer)?;
+
+    if let Some(x) = date_str {
+        NaiveDate::parse_from_str(x, DT_FORMAT)
+            .map_err(serde::de::Error::custom)
+    }
+    else {
+        Ok(NaiveDate::default())
+    }
+}
+
+fn deserialize_naive_date_vec<'de, D>(
+    deserializer: D
+) -> Result<Vec<NaiveDate>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let maybe_str_list: Option<Vec<&str>> =
+        serde::Deserialize::deserialize(deserializer)?;
+
+    let mut list: Vec<NaiveDate> = vec![];
+
+    if let Some(str_list) = maybe_str_list {
+        for item in str_list {
+            let parse = NaiveDate::parse_from_str(item, DT_FORMAT);
+
+            match parse {
+                Ok(y) => list.push(y),
+                Err(_) => (),
+            }
+        }
+    }
+
+    Ok(list)
 }
 
 fn deserialize_optional_naive_date<'de, D>(
@@ -515,6 +583,7 @@ impl MySqlMarshal for Item {
                 .try_get::<NaiveDate, &str>("Created")
                 .ok(),
             Tags: vec![],
+            Dates: vec![],
         }
     }
 
@@ -539,12 +608,36 @@ impl MySqlMarshal for Tag {
     fn id(&self) -> i32 { self.Id }
 }
 
+impl MySqlMarshal for Date {
+    fn marshal(row: MySqlRow) -> Date {
+        Date {
+            Id: row.get("Id"),
+            Date: row.get("Date"),
+        }
+    }
+
+    fn col_name() -> String { String::from("*") }
+    fn table_name() -> String { String::from("date") }
+    fn id(&self) -> i32 { self.Id }
+}
+
 mod dbstring {
     use super::*;
 
     pub fn string_to_dbrow(input: &Option<String>) -> String {
         match input {
             Some(s) => String::from(format!("'{}'", s)),
+            None => String::from("NULL"),
+        }
+    }
+
+    pub fn date_to_insert(date: &Option<NaiveDate>) -> String {
+        match date {
+            Some(s) => format!(
+                "'{}'",
+                s.format("%Y-%m-%d").to_string(),
+            ),
+
             None => String::from("NULL"),
         }
     }
@@ -601,6 +694,45 @@ INSERT INTO `{}`.`Item` (
             .iter()
             .map(|x|
                 dbstring::myitem_to_dbrow(x)
+            )
+            .collect::<Vec<String>>()
+            .join("\n), (\n    "),
+    )
+}
+
+fn mydates_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
+    let mut dates = std::
+        collections::
+        BTreeMap::
+        <&NaiveDate, Date>::
+        new();
+
+    for item in items {
+        for naive_date in &item.Dates {
+            let date = Date {
+                Id: -1,
+                Date: naive_date.clone(),
+            };
+
+            dates
+                .entry(naive_date)
+                .or_insert(date);
+        }
+    }
+
+    format!(
+        r#"
+INSERT IGNORE INTO `{}`.`Date` (
+    Date
+) VALUES (
+    {}
+);
+        "#,
+        db_name,
+        dates
+            .iter()
+            .map(|(_, date)|
+                dbstring::date_to_insert(&Some(date.Date))
             )
             .collect::<Vec<String>>()
             .join("\n), (\n    "),
@@ -686,6 +818,44 @@ ON DUPLICATE KEY UPDATE
     Ok(id)
 }
 
+pub async fn add_by_name_itemhasdate(
+    pool: &MySqlPool,
+    db_name: &str,
+    item: &str,
+    date: &NaiveDate,
+) -> anyhow::Result<u64> {
+    let id = sqlx::query(
+        format!(
+            r#"
+INSERT INTO `{db_name}`.`Item_has_Date`
+    (`Item_Id`, `Date_Id`)
+SELECT
+    a.`Id`, b.`Id`
+FROM
+    `{db_name}`.`Item` as a
+    JOIN
+    `{db_name}`.`Date` as b
+WHERE
+    a.`Name` = ?
+    AND
+    b.`Date` = ?
+ON DUPLICATE KEY UPDATE
+    `Item_Id` = a.`Id`,
+    `Date_Id` = b.`Id`
+;
+            "#
+        )
+        .as_str()
+    )
+    .bind(item)
+    .bind(*date)
+    .execute(pool)
+    .await?
+    .last_insert_id();
+
+    Ok(id)
+}
+
 pub async fn add_list_itemhastag(
     pool: &MySqlPool,
     db_name: &str,
@@ -700,6 +870,28 @@ pub async fn add_list_itemhastag(
                 db_name,
                 &item.Name,
                 tag_name
+            )
+            .await?
+        }
+    }
+
+    Ok(id)
+}
+
+pub async fn add_list_itemhasdate(
+    pool: &MySqlPool,
+    db_name: &str,
+    items: &Vec<Item>,
+) -> anyhow::Result<u64> {
+    let mut id: u64 = 0;
+
+    for item in items {
+        for naive_date in &item.Dates {
+            id = add_by_name_itemhasdate(
+                pool,
+                db_name,
+                &item.Name,
+                naive_date,
             )
             .await?
         }
@@ -753,6 +945,16 @@ pub async fn reset_db(
         });
 
     _ = add_list_itemhastag(&pool, DB, &root.Items)
+        .await?;
+
+    _ = sqlx::query(&mydates_to_dbinsert(DB, &root.Items))
+        .execute(&pool)
+        .await
+        .map_err(|err| {
+            eprintln!("Item table insert failed. Error: {}", err);
+        });
+
+    _ = add_list_itemhasdate(&pool, DB, &root.Items)
         .await?;
 
     Ok((pool, root))
