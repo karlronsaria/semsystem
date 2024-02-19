@@ -41,7 +41,13 @@ impl<T: std::clone::Clone> When<T> {
 
 impl<'a> Default for When<&'a str> {
     fn default() -> When<&'a str> {
-        When::<&'a str>::Equal("?")
+        When::<&'a str>::Equal("")
+    }
+}
+
+impl<'a> Default for When<(&'a str, &'a str)> {
+    fn default() -> When<(&'a str, &'a str)> {
+        When::<(&'a str, &'a str)>::Equal(("", ""))
     }
 }
 
@@ -51,41 +57,67 @@ pub enum Agg {
     Intersect,
 }
 
-fn new_query_str<'a>(
-    from: &'a str,
-    to: &'a str,
-    when: When<&'a str>,
-    minus: Option<&'a Vec<i32>>,
-) -> Option<(String, String, String)> {
-    let (by, search_type) = match when {
-        When::Equal(x) => (x.to_string(), String::from("REGEXP CONCAT('^', ?, '$')")),
-        When::Like(x) => (x.to_string(), String::from("REGEXP CONCAT('^', ?)")),
-        When::Match(x) => (x.to_string(), String::from("REGEXP (?)")),
+fn get_haystack_and_needle<'a>(
+    when: When<(&'a str, &'a str)>
+) -> (String, String) {
+    let (by, search_type, needle) = match when {
+        When::Equal((x, y)) =>
+            (x.to_string(), String::from("REGEXP CONCAT('^', ?, '$')"), y.to_string()),
+
+        When::Like((x, y)) =>
+            (x.to_string(), String::from("REGEXP CONCAT('^', ?)"), y.to_string()),
+
+        When::Match((x, y)) =>
+            (x.to_string(), String::from("REGEXP (?)"), y.to_string()),
+
         When::Approx(_) => {
             eprintln!(
                 "Error: new_query_str: Fuzzy search not yet implemented",
             );
 
-            return None;
+            return (String::new(), String::new());
         },
-        When::Less(x) => (x.to_string(), String::from("< (?)")),
-        When::Greater(x) => (x.to_string(), String::from("> (?)")),
-        When::AtMost(x) => (x.to_string(), String::from("<= (?)")),
-        When::AtLeast(x) => (x.to_string(), String::from(">= (?)")),
+
+        When::Less((x, y)) =>
+            (x.to_string(), String::from("< (?)"), y.to_string()),
+
+        When::Greater((x, y)) =>
+            (x.to_string(), String::from("> (?)"), y.to_string()),
+
+        When::AtMost((x, y)) =>
+            (x.to_string(), String::from("<= (?)"), y.to_string()),
+
+        When::AtLeast((x, y)) =>
+            (x.to_string(), String::from(">= (?)"), y.to_string()),
+
         When::Other(_) => {
             eprintln!(
                 "Error: new_query_str: Other search not yet implemented",
             );
 
-            return None;
+            return (String::new(), String::new());
         },
     };
 
-    let to = if to.is_empty() { from } else { to };
+    (format!("`{by}` {search_type}"), needle)
+}
+
+fn new_query_str<'a>(
+    from: &'a str,
+    to: &'a str,
+    haystack: String,
+    minus: Option<&'a Vec<i32>>,
+) -> Option<(String, String, String)> {
+    let to =
+        if to.is_empty() { from } else { to };
 
     let query =
         if to == from {
-            (format!("`{to}`"), format!("`{by}` {search_type}"), String::from("`id`"))
+            (
+                format!("`{to}`"),
+                haystack,
+                String::from("`id`"),
+            )
         }
         else {
             let other_table: &'a str =
@@ -112,7 +144,7 @@ fn new_query_str<'a>(
             (
                 from_table_str,
                 format!(
-                    "`{from}_Id` in (SELECT `Id` FROM `{from}` WHERE `{by}` {search_type})"
+                    "`{from}_Id` in (SELECT `Id` FROM `{from}` WHERE {haystack})"
                 ),
                 format!(
                     "`{from}_Id`"
@@ -158,9 +190,8 @@ pub struct Query<'a> {
     from: &'a str,
 
     /// [ SearchType ( Haystack ) ]
-    when: Vec<When<&'a str>>,
+    when: Vec<When<(&'a str, &'a str)>>,
 
-    needle: String,
     minus: Option<&'a Vec<i32>>,
     aggregate: Agg,
 }
@@ -173,8 +204,7 @@ impl<'a> Query<'a> {
     pub async fn to_complete_item(&self, item: Item) -> Item {
         let tags = Query::builder(self.pool)
             .from("item")
-            .when(&vec![When::Equal("id")])
-            .needle(item.Id)
+            .when(&vec![When::Equal(("id", &item.Id.to_string()))])
             .build()
             .to::<Tag>()
             .await
@@ -184,8 +214,7 @@ impl<'a> Query<'a> {
 
         let dates = Query::builder(self.pool)
             .from("item")
-            .when(&vec![When::Equal("id")])
-            .needle(item.Id)
+            .when(&vec![When::Equal(("id", &item.Id.to_string()))])
             .build()
             .to::<Date>()
             .await
@@ -233,14 +262,14 @@ impl<'a> Query<'a> {
             + PartialEq
     {
         self.get_results(
-            self.when[0].clone(),
+            vec![self.when[0].clone()],
             self.minus,
         )
         .await
     }
 
     #[allow(unused_variables)]
-    async fn get_tiered_results<T>(&self, when: Vec<When<&str>>) -> Vec<When<Vec<T>>>
+    async fn get_tiered_results<T>(&self, when: Vec<When<(&str, &str)>>) -> Vec<When<Vec<T>>>
     where
         T: MySqlMarshal
             + std::clone::Clone
@@ -253,7 +282,7 @@ impl<'a> Query<'a> {
         for tier in when {
             let results =
                 self.get_results::<T>(
-                    tier.clone(),
+                    vec![tier.clone()],
                     minus,
                 )
                 .await;
@@ -273,7 +302,7 @@ impl<'a> Query<'a> {
 
     async fn get_results<T>(
         &self,
-        when: When<&str>,
+        when: Vec<When<(&str, &str)>>,
         minus: Option<&Vec<i32>>,
     ) -> Vec<T>
     where
@@ -283,11 +312,28 @@ impl<'a> Query<'a> {
             + PartialEq
     {
         let to = T::table_name();
+        let mut haystacks: Vec<String> = vec![];
+        let mut needles: Vec<String> = vec![];
+        let mut true_number_of_needles: usize = 0;
+
+        for pair in when {
+            let (haystack, needle) = get_haystack_and_needle(pair);
+
+            haystacks.push(haystack);
+            needles.push(needle.clone());
+
+            true_number_of_needles += needle
+                .split("|")
+                .collect::<Vec<&str>>()
+                .len();
+        }
+
+        let haystacks: String = haystacks.join(" AND ");
 
         let query = new_query_str(
             self.from,
             to.as_str(),
-            when,
+            haystacks,
             minus,
         );
 
@@ -313,10 +359,7 @@ impl<'a> Query<'a> {
                     Agg::Union => String::new(),
                     Agg::Intersect => format!(
                         " HAVING COUNT(DISTINCT {countby_col}) = {}",
-                        self.needle
-                            .split("|")
-                            .collect::<Vec<&str>>()
-                            .len(),
+                        true_number_of_needles,
                     ),
                 },
             );
@@ -325,8 +368,13 @@ impl<'a> Query<'a> {
             // println!("\n{}", query);
             // println!("? = {}\n", self.needle);
 
-            match sqlx::query(query.as_str())
-                .bind(self.needle.clone())
+            let mut query = sqlx::query(query.as_str());
+
+            for needle in needles {
+                query = query.bind(needle.clone())
+            }
+
+            match query
                 .fetch_all(self.pool)
                 .await {
                     Err(msg) => {
@@ -351,9 +399,8 @@ pub struct QueryBuilder<'a> {
     from: &'a str,
 
     /// [ SearchType ( Haystack ) ]
-    when: Vec<When<&'a str>>,
+    when: Vec<When<(&'a str, &'a str)>>,
 
-    needle: String,
     minus: Option<&'a Vec<i32>>,
     aggregate: Agg,
 }
@@ -365,8 +412,7 @@ impl<'a> QueryBuilder<'a> {
         QueryBuilder {
             pool: pool,
             from: Self::DEFAULT_STR,
-            when: vec![When::<&str>::default()],
-            needle: Self::DEFAULT_STR.to_string(),
+            when: vec![When::<(&str, &str)>::default()],
             minus: None,
             aggregate: Agg::Union,
         }
@@ -382,16 +428,8 @@ impl<'a> QueryBuilder<'a> {
         self
     }
 
-    pub fn when(&'a mut self, when: &'a Vec<When<&'a str>>) -> &'a mut Self {
+    pub fn when(&'a mut self, when: &'a Vec<When<(&'a str, &'a str)>>) -> &'a mut Self {
         self.when = when.clone();
-        self
-    }
-
-    pub fn needle<T>(&'a mut self, needle: T) -> &'a mut Self
-    where
-        T: ToString,
-    {
-        self.needle = needle.to_string();
         self
     }
 
@@ -410,7 +448,6 @@ impl<'a> QueryBuilder<'a> {
             pool: self.pool,
             from: self.from,
             when: self.when.clone(),
-            needle: self.needle.clone(),
             minus: self.minus.clone(),
             aggregate: self.aggregate.clone(),
         }
@@ -1106,11 +1143,10 @@ pub mod tests {
             Query::builder(&pool)
                 .from(from)
                 .when(&vec![
-                    When::Equal(by),
-                    When::Like(by),
-                    When::Match(by),
+                    When::Equal((by, needle)),
+                    When::Like((by, needle)),
+                    When::Match((by, needle)),
                 ])
-                .needle(needle)
                 .build()
                 .to_tiers::<Item>()
                 .await;
@@ -1155,8 +1191,7 @@ pub mod tests {
 
                 let actual = Query::builder(&pool)
                     .from("tag")
-                    .when(&vec![When::Equal("name")])
-                    .needle("finance")
+                    .when(&vec![When::Equal(("name", "finance"))])
                     .minus(Some(&minus))
                     .build()
                     .to_complete_items()
