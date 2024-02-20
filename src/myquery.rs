@@ -947,6 +947,21 @@ pub async fn run_sql_file(
     pool: &MySqlPool,
     file_path: &str,
 ) {
+    let path = std::fs::read_to_string(file_path)
+        .expect(&format!("Error: Failed to find path '{}'", file_path));
+
+    _ = sqlx::query(path.as_str())
+        .execute(pool)
+        .await
+        .map_err(|err| {
+            eprintln!("Query failed: [{}]\nError: {}", &path, err);
+        });
+}
+
+pub async fn run_sql_statements_from_file(
+    pool: &MySqlPool,
+    file_path: &str,
+) {
     for item in std::fs::read_to_string(file_path)
         .expect(&format!("Error: Failed to find path '{}'", file_path))
         .split(";")
@@ -978,9 +993,9 @@ pub async fn reset_db(
 
     // (karlr 2024_02_20): Each file needs to be run in a
     // separate statement in order to avoid race conditions.
-    run_sql_file(&pool, &NEWDB_SQL_PATH).await;
-    run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[0]).await;
-    run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[1]).await;
+    run_sql_statements_from_file(&pool, &NEWDB_SQL_PATH).await;
+    // run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[0]).await;
+    // run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[1]).await;
 
     _ = sqlx::query(&myitems_to_dbinsert(&root.Items))
         .execute(&pool)

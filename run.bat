@@ -7,6 +7,8 @@ set "app=mysql --login-path=%loginPath%"
 %app% -e "drop database if exists %db%;"
 %app% -e "create database %db%;"
 
+cat %~dp0./sql/function.mysql.sql | %app%
+
 if "%~1" EQU "test" goto :test
 goto :run
 

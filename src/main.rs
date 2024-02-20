@@ -76,6 +76,32 @@ async fn main() -> anyhow::Result<()> {
     // let temp: String = myrow_to_dbassociate("item", "tag", 5, 2);
     // println!("{temp}");
 
+    let opts = sqlx::mysql::MySqlConnectOptions::new()
+        .host(HOST)
+        .username(USER)
+        .password(PASS)
+        .database(DB);
+
+    use sqlx::Row;
+
+    if let Ok((pool, _)) = reset_db(&opts).await {
+        match sqlx::query(format!(" SELECT Levenshtein('what', 'tahw');").as_str())
+            .fetch_all(&pool)
+            .await {
+                Err(msg) => {
+                    eprintln!("Error: {}", msg);
+                },
+
+                Ok(rows) => {
+                    let what = rows.into_iter()
+                        .map(|row| row.get(0))
+                        .collect::<Vec<i32>>();
+
+                    println!("{}", what[0]);
+                }
+            };
+    }
+
     Ok(())
 }
 

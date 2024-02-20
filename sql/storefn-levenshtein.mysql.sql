@@ -2,7 +2,7 @@
 -- - url: <https://www.artfulsoftware.com/infotree/qrytip.php?id=552&m=0>
 -- - retrieved: 2024_02_20
 
-DELIMITER $$
+-- DELIMITER $$
 
 CREATE FUNCTION Levenshtein(
     s1 VARCHAR(255), s2 VARCHAR(255)
@@ -55,7 +55,7 @@ BEGIN
     END IF;
 
     RETURN c;
-END$$
+END; -- $$
 
-DELIMITER ;
+-- DELIMITER ;
 
