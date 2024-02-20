@@ -9,6 +9,10 @@ pub const DB: &str = "mydb";
 pub const DT_FORMAT: &str = "%Y-%m-%d";
 pub const NEWDB_SQL_PATH: &str = "./sql/new-db.mysql.sql";
 pub const ITEM_JSON_PATH: &str = "./json/Item.json";
+pub const STORED_FUNCTION_SQL_PATH: [&str; 2] = [
+    "./sql/storefn-levenshtein.mysql.sql",
+    "./sql/storefn-levenshtein_ratio.mysql.sql",
+];
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum When<T: std::clone::Clone> {
@@ -490,9 +494,7 @@ where
 
     if let Some(str_list) = maybe_str_list {
         for item in str_list {
-            let parse = NaiveDate::parse_from_str(item, DT_FORMAT);
-
-            match parse {
+            match NaiveDate::parse_from_str(item, DT_FORMAT) {
                 Ok(y) => list.push(y),
                 Err(_) => (),
             }
@@ -941,13 +943,29 @@ pub async fn add_list_itemhasdate(
     Ok(id)
 }
 
+pub async fn run_sql_file(
+    pool: &MySqlPool,
+    file_path: &str,
+) {
+    for item in std::fs::read_to_string(file_path)
+        .expect(&format!("Error: Failed to find path '{}'", file_path))
+        .split(";")
+        .map(|x| x.trim())
+        .filter(|&x| !x.is_empty())
+    {
+        _ = sqlx::query(format!("{};", item).as_str())
+            .execute(pool)
+            .await
+            .map_err(|err| {
+                eprintln!("Query failed: [{}]\nError: {}", &item, err);
+            });
+    }
+}
+
 // todo: move to test
 pub async fn reset_db(
     opts: &sqlx::mysql::MySqlConnectOptions
 ) -> anyhow::Result<(MySqlPool, DbRoot)> {
-    let sql = std::fs::read_to_string(&NEWDB_SQL_PATH)
-        .expect(&format!("Error: Failed to find path '{}'", NEWDB_SQL_PATH));
-
     let pool: MySqlPool =
         MySqlPool::connect_with(opts.to_owned())
         .await?;
@@ -958,18 +976,11 @@ pub async fn reset_db(
     let root: DbRoot = serde_json::from_str(&json)
         .unwrap();
 
-    for item in sql
-        .split(";")
-        .map(|x| x.trim())
-        .filter(|&x| !x.is_empty())
-    {
-        _ = sqlx::query(format!("{};", item).as_str())
-            .execute(&pool)
-            .await
-            .map_err(|err| {
-                eprintln!("Query failed: [{}]\nError: {}", &item, err);
-            });
-    }
+    // (karlr 2024_02_20): Each file needs to be run in a
+    // separate statement in order to avoid race conditions.
+    run_sql_file(&pool, &NEWDB_SQL_PATH).await;
+    run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[0]).await;
+    run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[1]).await;
 
     _ = sqlx::query(&myitems_to_dbinsert(&root.Items))
         .execute(&pool)

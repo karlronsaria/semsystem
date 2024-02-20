@@ -1,4 +1,6 @@
 pub mod myquery;
+
+#[allow(unused_imports)]
 use crate::myquery::*;
 
 #[tokio::main(flavor = "current_thread")]
