@@ -244,16 +244,6 @@ impl<'a> Query<'a> {
         list
     }
 
-    pub async fn to_tiers<T>(&self) -> Vec<When<Vec<T>>>
-    where
-        T: MySqlMarshal
-            + std::clone::Clone
-            + Eq
-            + PartialEq
-    {
-        self.get_tiered_results(self.when.clone()).await
-    }
-
     pub async fn to<T>(&self) -> Vec<T>
     where
         T: MySqlMarshal
@@ -266,38 +256,6 @@ impl<'a> Query<'a> {
             self.minus,
         )
         .await
-    }
-
-    #[allow(unused_variables)]
-    async fn get_tiered_results<T>(&self, when: Vec<When<(&str, &str)>>) -> Vec<When<Vec<T>>>
-    where
-        T: MySqlMarshal
-            + std::clone::Clone
-            + Eq
-            + PartialEq
-    {
-        let mut all_results: Vec<When<Vec<T>>> = vec![];
-        let minus: Option<&Vec<i32>> = None;
-
-        for tier in when {
-            let results =
-                self.get_results::<T>(
-                    vec![tier.clone()],
-                    minus,
-                )
-                .await;
-
-            all_results.push(tier.into_when(results.clone()));
-
-            let minus = Some(
-                results
-                    .into_iter()
-                    .map(|x| x.id())
-                    .collect::<Vec<i32>>()
-            );
-        }
-
-        all_results
     }
 
     async fn get_results<T>(
@@ -342,7 +300,7 @@ impl<'a> Query<'a> {
             // - url: <https://stackoverflow.com/questions/41887460/select-list-is-not-in-group-by-clause-and-contains-nonaggregated-column-inc>
             // - retrieved: 2024_02_18
             let query = format!(
-                r#"SELECT {} FROM `{}` WHERE `Id` IN (
+r#"SELECT {} FROM `{}` WHERE `Id` IN (
     SELECT `Id`
     FROM
         {}
@@ -350,7 +308,8 @@ impl<'a> Query<'a> {
         {}
     GROUP BY
         `Id`{}
-);"#,
+)
+ORDER BY `Id`;"#,
                 T::col_name(),
                 to,
                 from,
@@ -366,7 +325,7 @@ impl<'a> Query<'a> {
 
             // // todo
             // println!("\n{}", query);
-            // println!("? = {}\n", self.needle);
+            // println!("? = {:#?}\n", needles);
 
             let mut query = sqlx::query(query.as_str());
 
@@ -434,12 +393,12 @@ impl<'a> QueryBuilder<'a> {
     }
 
     pub fn minus(&'a mut self, minus: Option<&'a Vec<i32>>) -> &'a mut Self {
-        self.minus = minus;
+        self.minus = minus.clone();
         self
     }
 
     pub fn aggregate(&'a mut self, aggregate: Agg) -> &'a mut Self {
-        self.aggregate = aggregate;
+        self.aggregate = aggregate.clone();
         self
     }
 
@@ -1125,6 +1084,40 @@ pub mod tests {
             .collect::<Vec<(T, T)>>()
     }
 
+    #[allow(unused_variables)]
+    async fn get_tiered_results<T>(
+        query: &Query<'_>,
+    ) -> Vec<When<Vec<T>>>
+    where
+        T: MySqlMarshal
+            + std::clone::Clone
+            + Eq
+            + PartialEq
+    {
+        let mut all_results: Vec<When<Vec<T>>> = vec![];
+        let minus: Option<&Vec<i32>> = None;
+
+        for tier in &query.when {
+            let results =
+                query.get_results::<T>(
+                    vec![tier.clone()],
+                    minus,
+                )
+                .await;
+
+            all_results.push(tier.into_when(results.clone()));
+
+            let minus = Some(
+                results
+                    .into_iter()
+                    .map(|x| x.id())
+                    .collect::<Vec<i32>>()
+            );
+        }
+
+        all_results
+    }
+
     async fn test_three_tiered_search(
         pool: &sqlx::mysql::MySqlPool,
         from: &str,
@@ -1139,16 +1132,21 @@ pub mod tests {
 
         let (equals, likes, matches) = get_actual_searches(&root, needle);
 
+        let when = vec![
+            When::Equal((by, needle)),
+            When::Like((by, needle)),
+            When::Match((by, needle)),
+        ];
+
+        let mut builder = Query::builder(&pool);
+
+        let query = builder
+            .from(&from)
+            .when(&when)
+            .build();
+
         let actual: Vec<When<Vec<Item>>> =
-            Query::builder(&pool)
-                .from(from)
-                .when(&vec![
-                    When::Equal((by, needle)),
-                    When::Like((by, needle)),
-                    When::Match((by, needle)),
-                ])
-                .build()
-                .to_tiers::<Item>()
+            get_tiered_results(&query)
                 .await;
 
         assert_ne!(actual.len(), 0);
@@ -1168,7 +1166,7 @@ pub mod tests {
     }
 
     #[test]
-    pub fn items_by_tagname_succeeds() {
+    pub fn test_000_items_by_tagname_succeeds() {
         let opts = sqlx::mysql::MySqlConnectOptions::new()
             .host(HOST)
             .username(USER)
@@ -1181,7 +1179,7 @@ pub mod tests {
             if let Ok((pool, root)) = reset_db(&opts).await {
                 let expected: Vec<Item> = root.Items
                     .into_iter()
-                    .filter(|x| x.Name.starts_with("Finance"))
+                    .filter(|x| x.Name.starts_with("Financ"))
                     .collect();
 
                 let expected = match exclude(expected.clone(), minus.clone()) {
@@ -1210,7 +1208,42 @@ pub mod tests {
     }
 
     #[test]
-    pub fn three_tiered_search_items_by_name_succeeds() {
+    pub fn test_001_items_by_tagname_intersect_succeeds() {
+        let opts = sqlx::mysql::MySqlConnectOptions::new()
+            .host(HOST)
+            .username(USER)
+            .password(PASS)
+            .database(DB);
+
+        tokio_test::block_on(async {
+            if let Ok((pool, root)) = reset_db(&opts).await {
+                let expected: Vec<Item> = root.Items
+                    .into_iter()
+                    .filter(|x| x.Name.starts_with("Auto Claim"))
+                    .collect();
+
+                let actual = Query::builder(&pool)
+                    .from("tag")
+                    .when(&vec![When::Match(("name", "auto|claim"))])
+                    .aggregate(Agg::Intersect)
+                    .build()
+                    .to_complete_items()
+                    .await;
+
+                assert_ne!(actual.len(), 0);
+
+                for (index, item) in actual
+                    .iter()
+                    .enumerate()
+                {
+                    assert_eq!(*item, expected[index]);
+                }
+            }
+        });
+    }
+
+    #[test]
+    pub fn test_002_three_tiered_search_items_by_name_succeeds() {
         let opts = sqlx::mysql::MySqlConnectOptions::new()
             .host(HOST)
             .username(USER)
@@ -1229,6 +1262,57 @@ pub mod tests {
                 for needle in needles {
                     test_three_tiered_search(&pool, "item", "name", needle)
                         .await;
+                }
+            }
+        });
+    }
+
+    #[test]
+    pub fn test_003_date_lower_bound() {
+        let opts = sqlx::mysql::MySqlConnectOptions::new()
+            .host(HOST)
+            .username(USER)
+            .password(PASS)
+            .database(DB);
+
+        let json = std::fs::read_to_string(&ITEM_JSON_PATH)
+            .expect(&format!("Error: Failed to find path '{}'", ITEM_JSON_PATH));
+
+        let root: DbRoot = serde_json::from_str(&json)
+            .unwrap();
+
+        let lower: &str = "2022-12-31";
+
+        let lower_as_date: NaiveDate =
+            NaiveDate::parse_from_str(lower, "%Y-%m-%d")
+                .expect("You entered the test string or date format incorrectly.");
+
+        tokio_test::block_on(async {
+            if let Ok(pool) = MySqlPool::connect_with(opts.to_owned()).await {
+                let expected: Vec<Item> = root.Items
+                    .into_iter()
+                    .filter(|x| {
+                        for date in &x.Dates {
+                            if date > &lower_as_date {
+                                return true;
+                            }
+                        }
+
+                        false
+                    })
+                    .collect();
+
+                let actual = Query::builder(&pool)
+                    .from("date")
+                    .when(&vec![When::Greater(("date", lower))])
+                    .build()
+                    .to::<Item>()
+                    .await;
+
+                assert_ne!(actual.len(), 0);
+
+                for (actual, expected) in get_zip(actual, expected) {
+                    assert_eq!(actual.Name, expected.Name);
                 }
             }
         });

@@ -3,108 +3,62 @@ use crate::myquery::*;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let needle_1 = "est uan sin ter";
-    let needle_2 = "uan sin ter ius";
+    // let opts = sqlx::mysql::MySqlConnectOptions::new()
+    //     .host(HOST)
+    //     .username(USER)
+    //     .password(PASS)
+    //     .database(DB);
 
-    let opts = sqlx::mysql::MySqlConnectOptions::new()
-        .host(HOST)
-        .username(USER)
-        .password(PASS)
-        .database(DB);
+    // let (pool, _) = reset_db(&opts)
+    //     .await?;
 
-    let (pool, _) = reset_db(&opts)
-        .await?;
+    // use sqlx::MySqlPool;
+    // use chrono::NaiveDate;
 
-    for item in Query::builder(&pool)
-        .from("date")
-        .when(&vec![When::Greater(("date", "2022-12-31"))])
-        .build()
-        .to::<Item>()
-        .await
-        .into_iter() {
-            println!("Item: {}", item.Name);
-        }
+    // let opts = sqlx::mysql::MySqlConnectOptions::new()
+    //     .host(HOST)
+    //     .username(USER)
+    //     .password(PASS)
+    //     .database(DB);
 
-    for id in Query::builder(&pool)
-        .from("tag")
-        .when(&vec![When::Match(("name", "auto|claim"))])
-        .aggregate(Agg::Intersect)
-        .build()
-        .to::<Id::<Item>>()
-        .await
-        .into_iter() {
-            println!("Id: {}", id.get());
-        }
+    // let json = std::fs::read_to_string(&ITEM_JSON_PATH)
+    //     .expect(&format!("Error: Failed to find path '{}'", ITEM_JSON_PATH));
 
-    for id in Query::builder(&pool)
-        .from("item")
-        .when(&vec![When::Match(("name", "Financ"))])
-        .aggregate(Agg::Intersect)
-        .build()
-        .to::<Id::<Item>>()
-        .await
-        .into_iter() {
-            println!("Id: {}", id.get());
-        }
+    // let root: DbRoot = serde_json::from_str(&json)
+    //     .unwrap();
 
-    for tier in Query::builder(&pool)
-        .from("item")
-        .when(&vec![
-            When::Equal(("name", needle_1)),
-            When::Like(("name", needle_1)),
-            When::Match(("name", needle_1)),
-        ])
-        .build()
-        .to_tiers::<Item>()
-        .await
-        .into_iter() {
-            println!("{:#?}", tier);
-        }
+    // let lower: &str = "2022-12-31";
 
-    for tier in Query::builder(&pool)
-        .from("item")
-        .when(&vec![
-            When::Equal(("name", needle_2)),
-            When::Like(("name", needle_2)),
-            When::Match(("name", needle_2)),
-        ])
-        .build()
-        .to_tiers::<Item>()
-        .await
-        .into_iter() {
-            println!("{:#?}", tier);
-        }
+    // let lower_as_date: NaiveDate =
+    //     NaiveDate::parse_from_str(lower, "%Y-%m-%d")
+    //         .expect("You entered the test string or date format incorrectly.");
 
-    // let expected: Vec<When<Vec<Item>>> = vec![
-    //     When::Equal(
-    //         root.Items
-    //             .clone()
-    //             .into_iter()
-    //             .filter(|x| x.Name == needle_1)
-    //             .collect::<Vec<Item>>()
-    //     ),
+    // if let Ok(pool) = MySqlPool::connect_with(opts.to_owned()).await {
+    //     let expected: Vec<Item> = root.Items
+    //         .into_iter()
+    //         .filter(|x| {
+    //             for date in &x.Dates {
+    //                 if date > &lower_as_date {
+    //                     return true;
+    //                 }
+    //             }
 
-    //     When::Like(
-    //         root.Items
-    //             .clone()
-    //             .into_iter()
-    //             .filter(|x| x.Name.starts_with(needle_1))
-    //             .collect::<Vec<Item>>()
-    //     ),
+    //             false
+    //         })
+    //         .collect();
 
-    //     When::Match(
-    //         root.Items
-    //             .clone()
-    //             .into_iter()
-    //             .filter(|x| regex::Regex::new(needle_1)
-    //                 .unwrap()
-    //                 .is_match(&x.Name)
-    //             )
-    //             .collect::<Vec<Item>>()
-    //     ),
-    // ];
+    //     let actual = Query::builder(&pool)
+    //         .from("date")
+    //         .when(&vec![When::Greater(("date", lower))])
+    //         .build()
+    //         .to_complete_items()
+    //         .await;
 
-    // println!("{:#?}", expected);
+    //     for actual in actual {
+    //         println!("{:#?}", actual);
+    //     }
+    // }
+
     Ok(())
 }
 
