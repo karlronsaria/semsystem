@@ -59,6 +59,21 @@ async fn main() -> anyhow::Result<()> {
     //     }
     // }
 
+    // let json = std::fs::read_to_string(&ITEM_JSON_PATH)
+    //     .expect(&format!("Error: Failed to find path '{}'", ITEM_JSON_PATH));
+
+    // let root: DbRoot = serde_json::from_str(&json)
+    //     .unwrap();
+
+    // let temp: String = myrow_to_dbremove("item", vec![2, 3, 5, 1]);
+    // println!("{temp}");
+
+    // let temp: String = myrow_to_dbdissociate("item", "tag", 5, 2);
+    // println!("{temp}");
+
+    // let temp: String = myrow_to_dbassociate("item", "tag", 5, 2);
+    // println!("{temp}");
+
     Ok(())
 }
 

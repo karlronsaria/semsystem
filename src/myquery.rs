@@ -6,7 +6,7 @@ pub const USER: &str = "myroot";
 pub const PASS: &str = "asa1ase3";
 pub const HOST: &str = "localhost";
 pub const DB: &str = "mydb";
-pub const DT_FORMAT: &str = "%Y_%m_%d";
+pub const DT_FORMAT: &str = "%Y-%m-%d";
 pub const NEWDB_SQL_PATH: &str = "./sql/new-db.mysql.sql";
 pub const ITEM_JSON_PATH: &str = "./json/Item.json";
 
@@ -622,30 +622,16 @@ mod dbstring {
 
     pub fn string_to_dbrow(input: &Option<String>) -> String {
         match input {
-            Some(s) => String::from(format!("'{}'", s)),
+            Some(s) => format!("'{}'", s),
             None => String::from("NULL"),
         }
     }
 
-    pub fn date_to_insert(date: &Option<NaiveDate>) -> String {
+    pub fn date_to_dbrow(date: &Option<NaiveDate>) -> String {
         match date {
             Some(s) => format!(
                 "'{}'",
-                s.format("%Y-%m-%d").to_string(),
-            ),
-
-            None => String::from("NULL"),
-        }
-    }
-
-    pub fn date_to_dbrow(date: &Option<NaiveDate>, format: &str) -> String {
-        match date {
-            Some(s) => String::from(
-                format!(
-                    "STR_TO_DATE('{}', '{}')",
-                    s.format(format).to_string(),
-                    format,
-                )
+                s.format(DT_FORMAT).to_string()
             ),
 
             None => String::from("NULL"),
@@ -656,9 +642,9 @@ mod dbstring {
         vec![
             format!("'{}'", item.Name),
             string_to_dbrow(&item.Description),
-            date_to_dbrow(&item.Arrival, DT_FORMAT),
-            date_to_dbrow(&item.Expiry, DT_FORMAT),
-            date_to_dbrow(&item.Created, DT_FORMAT),
+            date_to_dbrow(&item.Arrival),
+            date_to_dbrow(&item.Expiry),
+            date_to_dbrow(&item.Created),
         ]
         .join(",\n    ")
     }
@@ -666,37 +652,100 @@ mod dbstring {
     pub fn mytag_to_dbrow(tag: &Tag) -> String {
         vec![
             format!("'{}'", tag.Name),
-            date_to_dbrow(&tag.Created, DT_FORMAT),
+            date_to_dbrow(&tag.Created),
         ]
         .join(",\n    ")
     }
 }
 
-fn myitems_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
-    format!(
-        r#"
-INSERT INTO `{}`.`Item` (
-    Name,
-    Description,
-    Arrival,
-    Expiry,
-    Created
-) VALUES (
-    {}
-);
-        "#,
-        db_name,
-        items
+fn get_zip<T: std::clone::Clone>(
+    first: Vec<T>,
+    secnd: Vec<T>
+) -> Vec<(T, T)> {
+    first
+        .iter()
+        .cloned()
+        .zip(secnd
             .iter()
-            .map(|x|
-                dbstring::myitem_to_dbrow(x)
-            )
+            .cloned()
+        )
+        .collect::<Vec<(T, T)>>()
+}
+
+pub fn myrow_to_dbremove(table: &str, ids: Vec<i32>) -> String {
+    format!(
+        "DELETE FROM `{table}` WHERE `Id` IN ({});",
+        ids.iter()
+            .map(|id| id.to_string())
             .collect::<Vec<String>>()
-            .join("\n), (\n    "),
+            .join(", "),
     )
 }
 
-fn mydates_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
+pub fn myrow_to_dbassociate(
+    main_table: &str,
+    property_table: &str,
+    main_id: i32,
+    property_id: i32,
+) -> String {
+    format!(
+r#"INSERT IGNORE INTO `{main_table}_has_{property_table}` (
+    `{main_table}_Id`, `{property_table}_Id`
+) VALUES (
+    {main_id}, {property_id}
+);"#,
+    )
+}
+
+pub fn myrow_to_dbdissociate(
+    main_table: &str,
+    property_table: &str,
+    main_id: i32,
+    property_id: i32,
+) -> String {
+    format!(
+r#"DELETE FROM `{main_table}_has_{property_table}`
+WHERE `{main_table}_Id` = {main_id}
+AND `{property_table}_Id` = {property_id};"#
+    )
+}
+
+pub fn myitems_to_dbinsert(items: &Vec<Item>) -> String {
+    let values = items
+        .iter()
+        .map(|x| dbstring::myitem_to_dbrow(x))
+        .collect::<Vec<String>>();
+
+    let columns = vec![
+        "Name",
+        "Description",
+        "Arrival",
+        "Expiry",
+        "Created",
+    ];
+
+    format!(
+r#"INSERT INTO `Item` (
+    {}
+)
+VALUES (
+    {}
+)
+AS new_rows
+ON DUPLICATE KEY UPDATE
+    {}
+;"#,
+        columns.join(",\n    "),
+        values.join("\n), (\n    "),
+        columns
+            .iter()
+            .map(|x| format!("{x} = new_rows.{x}"))
+            .collect::<Vec<String>>()
+            .join(",\n    "),
+    )
+}
+
+pub fn mydates_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     let mut dates = std::
         collections::
         BTreeMap::
@@ -717,25 +766,23 @@ fn mydates_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     }
 
     format!(
-        r#"
-INSERT IGNORE INTO `{}`.`Date` (
+r#"INSERT IGNORE INTO `{}`.`Date` (
     Date
 ) VALUES (
     {}
-);
-        "#,
+);"#,
         db_name,
         dates
             .iter()
             .map(|(_, date)|
-                dbstring::date_to_insert(&Some(date.Date))
+                dbstring::date_to_dbrow(&Some(date.Date))
             )
             .collect::<Vec<String>>()
             .join("\n), (\n    "),
     )
 }
 
-fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
+pub fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     let mut tags = std::
         collections::
         BTreeMap::
@@ -757,14 +804,12 @@ fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     }
 
     format!(
-        r#"
-INSERT IGNORE INTO `{}`.`Tag` (
+r#"INSERT IGNORE INTO `{}`.`Tag` (
     Name,
     Created
 ) VALUES (
     {}
-);
-        "#,
+);"#,
         db_name,
         tags
             .iter()
@@ -926,7 +971,7 @@ pub async fn reset_db(
             });
     }
 
-    _ = sqlx::query(&myitems_to_dbinsert(DB, &root.Items))
+    _ = sqlx::query(&myitems_to_dbinsert(&root.Items))
         .execute(&pool)
         .await
         .map_err(|err| {
@@ -1068,20 +1113,6 @@ pub mod tests {
         };
 
         (equals, likes, matches)
-    }
-
-    fn get_zip<T: std::clone::Clone>(
-        first: Vec<T>,
-        secnd: Vec<T>
-    ) -> Vec<(T, T)> {
-        first
-            .iter()
-            .cloned()
-            .zip(secnd
-                .iter()
-                .cloned()
-            )
-            .collect::<Vec<(T, T)>>()
     }
 
     #[allow(unused_variables)]
@@ -1284,7 +1315,7 @@ pub mod tests {
         let lower: &str = "2022-12-31";
 
         let lower_as_date: NaiveDate =
-            NaiveDate::parse_from_str(lower, "%Y-%m-%d")
+            NaiveDate::parse_from_str(lower, DT_FORMAT)
                 .expect("You entered the test string or date format incorrectly.");
 
         tokio_test::block_on(async {

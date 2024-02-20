@@ -4,59 +4,59 @@
         "Id": 1,
         "Name": "Finance Statement 000.pdf",
         "Description": null,
-        "Arrival": "2023_10_01",
+        "Arrival": "2023-10-01",
         "Expiry": null,
-        "Created": "2023_10_05",
+        "Created": "2023-10-05",
         "Tags": ["finance"],
-        "Dates": ["2021_01_15", "2022_05_30", "2023_10_05"]
+        "Dates": ["2021-01-15", "2022-05-30", "2023-10-05"]
     },
     {
         "Id": 2,
         "Name": "Finance Statement 001.pdf",
         "Description": null,
-        "Arrival": "2023_11_01",
+        "Arrival": "2023-11-01",
         "Expiry": null,
-        "Created": "2023_11_07",
+        "Created": "2023-11-07",
         "Tags": ["finance"],
-        "Dates": ["2021_03_01", "2022_08_16", "2024_01_31"]
+        "Dates": ["2021-03-01", "2022-08-16", "2024-01-31"]
     },
     {
         "Id": 3,
         "Name": "Finance Statement 002.pdf",
         "Description": null,
-        "Arrival": "2023_12_01",
+        "Arrival": "2023-12-01",
         "Expiry": null,
-        "Created": "2023_12_03",
+        "Created": "2023-12-03",
         "Tags": ["finance"],
-        "Dates": ["2021_01_15", "2022_05_30", "2023_10_05"]
+        "Dates": ["2021-01-15", "2022-05-30", "2023-10-05"]
     },
     {
         "Id": 4,
         "Name": "Finance Statement 003.pdf",
         "Description": null,
-        "Arrival": "2024_01_01",
+        "Arrival": "2024-01-01",
         "Expiry": null,
-        "Created": "2024_01_12",
+        "Created": "2024-01-12",
         "Tags": ["finance"],
-        "Dates": ["2021_03_01", "2022_08_17", "2024_02_01"]
+        "Dates": ["2021-03-01", "2022-08-17", "2024-02-01"]
     },
     {
         "Id": 5,
         "Name": "Auto Claim - December 2022.pdf",
         "Description": null,
-        "Arrival": "2022_12_12",
+        "Arrival": "2022-12-12",
         "Expiry": null,
-        "Created": "2022_12_12",
+        "Created": "2022-12-12",
         "Tags": ["auto", "claim"],
-        "Dates": ["2021_03_02", "2022_08_18"]
+        "Dates": ["2021-03-02", "2022-08-18"]
     },
     {
         "Id": 6,
         "Name": "Auto Claim - January 2023.pdf",
         "Description": null,
-        "Arrival": "2023_01_13",
+        "Arrival": "2023-01-13",
         "Expiry": null,
-        "Created": "2023_01_13",
+        "Created": "2023-01-13",
         "Tags": ["auto", "claim"],
         "Dates": []
     },
@@ -64,31 +64,31 @@
         "Id": 7,
         "Name": "est uan sin ter ius ira veh eme nti",
         "Description": null,
-        "Arrival": "2024_01_13",
+        "Arrival": "2024-01-13",
         "Expiry": null,
-        "Created": "2024_01_13",
+        "Created": "2024-01-13",
         "Tags": ["est", "uan", "sin", "ter"],
-        "Dates": ["2021_03_02", "2022_08_19"]
+        "Dates": ["2021-03-02", "2022-08-19"]
     },
     {
         "Id": 8,
         "Name": "est uan sin ter",
         "Description": null,
-        "Arrival": "2024_01_13",
+        "Arrival": "2024-01-13",
         "Expiry": null,
-        "Created": "2024_01_13",
+        "Created": "2024-01-13",
         "Tags": ["est", "uan", "sin", "ter"],
-        "Dates": ["2021_03_03", "2022_08_20"]
+        "Dates": ["2021-03-03", "2022-08-20"]
     },
     {
         "Id": 9,
         "Name": "uan sin ter ius",
         "Description": null,
-        "Arrival": "2024_01_13",
+        "Arrival": "2024-01-13",
         "Expiry": null,
-        "Created": "2024_01_13",
+        "Created": "2024-01-13",
         "Tags": ["est", "uan", "sin", "ter"],
-        "Dates": ["2021_04_04", "2022_08_21"]
+        "Dates": ["2021-04-04", "2022-08-21"]
     }
 ]
 }
