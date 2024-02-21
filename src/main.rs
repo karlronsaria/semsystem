@@ -100,6 +100,44 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", what[0]);
                 }
             };
+
+        match sqlx::query(
+            format!(
+                " SELECT *, Levenshtein(name, '?') AS dist FROM item ORDER BY dist, `Id`;")
+                    .as_str()
+            )
+            .bind("Finance")
+            .fetch_all(&pool)
+            .await {
+                Err(msg) => {
+                    eprintln!("Error: {}", msg);
+                },
+
+                Ok(rows) => {
+                    let what = rows.into_iter()
+                        .map(|row| row.get("dist"))
+                        .collect::<Vec<i32>>();
+
+                    println!("{}", what[0]);
+                }
+            };
+
+        for x in Query::builder(&pool)
+            .from("item")
+            .build()
+            .to_fuzzy::<Item>(
+                "name",
+                "Finance Statement 00",
+                None,
+            )
+            .await
+        {
+            match x {
+                Dist::<Item> { distance, payload } => {
+                    println!("{distance}: {}", payload.Name);
+                }
+            }
+        }
     }
 
     Ok(())

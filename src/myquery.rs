@@ -19,7 +19,6 @@ pub enum When<T: std::clone::Clone> {
     Equal(T),
     Like(T),
     Match(T),
-    Approx(T),
     Less(T),
     Greater(T),
     AtMost(T),
@@ -33,7 +32,6 @@ impl<T: std::clone::Clone> When<T> {
             When::Equal(_) => When::Equal(to),
             When::Like(_) => When::Like(to),
             When::Match(_) => When::Match(to),
-            When::Approx(_) => When::Approx(to),
             When::Less(_) => When::Less(to),
             When::Greater(_) => When::Greater(to),
             When::AtMost(_) => When::AtMost(to),
@@ -64,35 +62,27 @@ pub enum Agg {
 fn get_haystack_and_needle<'a>(
     when: When<(&'a str, &'a str)>
 ) -> (String, String) {
-    let (by, search_type, needle) = match when {
+    let (search_expr, needle) = match when {
         When::Equal((x, y)) =>
-            (x.to_string(), String::from("REGEXP CONCAT('^', ?, '$')"), y.to_string()),
+            (String::from(format!("`{x}` REGEXP CONCAT('^', ?, '$')")), y.to_string()),
 
         When::Like((x, y)) =>
-            (x.to_string(), String::from("REGEXP CONCAT('^', ?)"), y.to_string()),
+            (String::from(format!("`{x}` REGEXP CONCAT('^', ?)")), y.to_string()),
 
         When::Match((x, y)) =>
-            (x.to_string(), String::from("REGEXP (?)"), y.to_string()),
-
-        When::Approx(_) => {
-            eprintln!(
-                "Error: new_query_str: Fuzzy search not yet implemented",
-            );
-
-            return (String::new(), String::new());
-        },
+            (String::from(format!("`{x}` REGEXP ?")), y.to_string()),
 
         When::Less((x, y)) =>
-            (x.to_string(), String::from("< (?)"), y.to_string()),
+            (String::from(format!("`{x}` < ?")), y.to_string()),
 
         When::Greater((x, y)) =>
-            (x.to_string(), String::from("> (?)"), y.to_string()),
+            (String::from(format!("`{x}` > ?")), y.to_string()),
 
         When::AtMost((x, y)) =>
-            (x.to_string(), String::from("<= (?)"), y.to_string()),
+            (String::from(format!("`{x}` <= ?")), y.to_string()),
 
         When::AtLeast((x, y)) =>
-            (x.to_string(), String::from(">= (?)"), y.to_string()),
+            (String::from(format!("`{x}` >= ?")), y.to_string()),
 
         When::Other(_) => {
             eprintln!(
@@ -103,7 +93,17 @@ fn get_haystack_and_needle<'a>(
         },
     };
 
-    (format!("`{by}` {search_type}"), needle)
+    (search_expr, needle)
+}
+
+fn get_minus_str(
+    minus: &Vec<i32>
+) -> String {
+    minus
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<String>>()
+        .join(", ")
 }
 
 fn new_query_str<'a>(
@@ -158,18 +158,12 @@ fn new_query_str<'a>(
 
     let query = match minus {
         Some(exclude_ids) if exclude_ids.len() > 0 => {
-            let exclude_ids = exclude_ids
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
-
             (
                 query.0.to_string(),
                 format!(
                     "{} and `{to}_Id` not in ({})",
                     query.1,
-                    exclude_ids,
+                    get_minus_str(exclude_ids),
                 ),
                 query.1,
             )
@@ -260,6 +254,60 @@ impl<'a> Query<'a> {
             self.minus,
         )
         .await
+    }
+
+    pub async fn to_fuzzy<T>(
+        &self,
+        haystack: &str,
+        needle: &str,
+        minus: Option<&Vec<i32>>,
+    ) -> Vec<Dist<T>>
+    where
+        T: MySqlMarshal
+            + std::clone::Clone
+            + Eq
+            + PartialEq
+    {
+        let exclude_ids = match minus {
+            Some(exclude_ids) if exclude_ids.len() > 0 =>
+                format!(
+                    " WHERE `{}_Id` NOT IN ({})",
+                    T::table_name(),
+                    get_minus_str(exclude_ids),
+                ),
+
+            _ => String::new(),
+        };
+
+        let query = format!(
+r#"SELECT
+    {}, Levenshtein(`{haystack}`, '?') AS dist
+FROM
+    {}
+ORDER BY
+    dist, `Id`;"#,
+            T::col_name(),
+            format!("{}{}", T::table_name(), exclude_ids),
+        );
+
+        // // todo
+        // println!("\n{}", query);
+        // println!("? = {:#?}\n", needle);
+
+        match sqlx::query(query.as_str())
+            .bind(needle)
+            .fetch_all(self.pool)
+            .await {
+                Err(msg) => {
+                    eprintln!("Error: {}", msg);
+                    vec![]
+                },
+
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|row| Dist::<T>::marshal(row))
+                    .collect::<Vec<Dist<T>>>(),
+            }
     }
 
     async fn get_results<T>(
@@ -535,6 +583,12 @@ pub struct Id<T> {
     phantom: std::marker::PhantomData<T>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct Dist<T> {
+    pub distance: i32,
+    pub payload: T,
+}
+
 impl<T> Id<T> {
     pub fn get(&self) -> i32 { self.id }
 }
@@ -563,6 +617,22 @@ where
     fn col_name() -> String { i32::col_name() }
     fn table_name() -> String { T::table_name() }
     fn id(&self) -> i32 { self.get() }
+}
+
+impl<T> MySqlMarshal for Dist<T>
+where
+    T: MySqlMarshal,
+{
+    fn marshal(row: MySqlRow) -> Dist<T> {
+        Dist::<T> {
+            distance: row.get("dist"),
+            payload: T::marshal(row),
+        }
+    }
+
+    fn col_name() -> String { T::col_name() }
+    fn table_name() -> String { T::table_name() }
+    fn id(&self) -> i32 { self.payload.id() }
 }
 
 impl MySqlMarshal for Item {
