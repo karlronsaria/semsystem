@@ -1,12 +1,13 @@
 use sqlx::{mysql::MySqlPool, mysql::MySqlRow, Row};
-use chrono::NaiveDate;
+use chrono::NaiveDateTime;
 
+pub const INIT_ID: i32 = 1;
 pub const MAIN_TABLE: &str = "item";
 pub const USER: &str = "myroot";
 pub const PASS: &str = "asa1ase3";
 pub const HOST: &str = "localhost";
 pub const DB: &str = "mydb";
-pub const DT_FORMAT: &str = "%Y-%m-%d";
+pub const DT_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 pub const NEWDB_SQL_PATH: &str = "./sql/new-db.mysql.sql";
 pub const ITEM_JSON_PATH: &str = "./json/Item.json";
 pub const STORED_FUNCTION_SQL_PATH: [&str; 2] = [
@@ -187,7 +188,7 @@ pub struct Query<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
 
-    /// [ SearchType ( Haystack ) ]
+    /// [ SearchType ( (Haystack, Needle) ) ]
     when: Vec<When<(&'a str, &'a str)>>,
 
     minus: Option<&'a Vec<i32>>,
@@ -218,7 +219,7 @@ impl<'a> Query<'a> {
             .await
             .into_iter()
             .map(|date| date.Date)
-            .collect::<Vec<NaiveDate>>();
+            .collect::<Vec<NaiveDateTime>>();
 
         Item {
             Tags: tags,
@@ -268,11 +269,13 @@ impl<'a> Query<'a> {
             + Eq
             + PartialEq
     {
+        let col = T::col_name();
+        let to = T::table_name();
+
         let exclude_ids = match minus {
             Some(exclude_ids) if exclude_ids.len() > 0 =>
                 format!(
-                    " WHERE `{}_Id` NOT IN ({})",
-                    T::table_name(),
+                    "`{to}_Id` NOT IN ({}) AND ",
                     get_minus_str(exclude_ids),
                 ),
 
@@ -280,14 +283,29 @@ impl<'a> Query<'a> {
         };
 
         let query = format!(
-r#"SELECT
-    {}, Levenshtein(`{haystack}`, '?') AS dist
+r#"WITH `temp` AS (
+    SELECT
+        `Id` AS `temp_Id`,
+        `Name` AS `temp_Name`,
+        Levenshtein(`{haystack}`, '{needle}') AS `dist`
+    FROM
+        `{to}`
+)
+SELECT
+    {col}
 FROM
-    {}
+    `{to}`
+LEFT JOIN
+    `temp`
+ON
+    `{to}`.`Id` = `temp_Id`
+WHERE
+    {exclude_ids}`dist` < LEAST(
+        LENGTH(`{haystack}`),
+        LENGTH('{needle}')
+    )
 ORDER BY
-    dist, `Id`;"#,
-            T::col_name(),
-            format!("{}{}", T::table_name(), exclude_ids),
+    `dist`, `temp_Id`;"#,
         );
 
         // // todo
@@ -295,7 +313,6 @@ ORDER BY
         // println!("? = {:#?}\n", needle);
 
         match sqlx::query(query.as_str())
-            .bind(needle)
             .fetch_all(self.pool)
             .await {
                 Err(msg) => {
@@ -409,7 +426,7 @@ pub struct QueryBuilder<'a> {
     pool: &'a MySqlPool,
     from: &'a str,
 
-    /// [ SearchType ( Haystack ) ]
+    /// [ SearchType ( (Haystack, Needle) ) ]
     when: Vec<When<(&'a str, &'a str)>>,
 
     minus: Option<&'a Vec<i32>>,
@@ -465,6 +482,106 @@ impl<'a> QueryBuilder<'a> {
     }
 }
 
+pub async fn new_tag(pool: &MySqlPool, name: &str) -> i32 {
+    let result = sqlx::query(
+        &format!("SELECT `Id` FROM `Tag` WHERE `Name` = ?;")
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await;
+
+    match result {
+        Ok(x) => x.get("Id"),
+
+        Err(_) => match sqlx::query(
+            &format!("INSERT IGNORE INTO `Tag` (`Name`) VALUES (?);")
+        )
+        .bind(name)
+        .execute(pool)
+        .await {
+            Ok(y) => y.last_insert_id() as i32,
+            Err(_) => -1,
+        },
+    }
+}
+
+pub async fn new_date(pool: &MySqlPool, date: &str) -> i32 {
+    let datetime: String = to_datetime(date);
+
+    let result = sqlx::query(
+        &format!(
+            "SELECT `Id` FROM `Date` WHERE `Name` = '{}';",
+            datetime,
+        )
+    )
+    .fetch_one(pool)
+    .await;
+
+    match result {
+        Ok(x) => x.get("Id"),
+
+        Err(_) => match sqlx::query(
+            &format!(
+                "INSERT IGNORE INTO `Date` (`Date`) VALUES ('{}');",
+                datetime,
+            )
+        )
+        .execute(pool)
+        .await {
+            Ok(y) => y.last_insert_id() as i32,
+            Err(_) => -1,
+        },
+    }
+}
+
+pub fn add_items(
+    pool: &MySqlPool,
+    items: &Vec<Item>,
+) -> Vec<i32> {
+    for item in items {
+        let result = sqlx::query(&myitems_to_dbinsert([item]))
+            .execute(&pool)
+            .await
+            .map_err(|err| {
+                eprintln!("Item table insert failed. Error: {}", err);
+            });
+
+        let item_id = result.last_insert_id();
+
+        for tag_name in item.Tags {
+            let tag_id = new_tag(pool, tag_name).await;
+
+            if tag_id >= INIT_ID {
+                _ = sqlx::query(&myrow_to_dbassociate(
+                    "item", "tag",
+                    item_id, tag_id,
+                ))
+                .execute(pool)
+                .await
+                .map_err(|err| {
+                    eprintln!("Item_has_Tag association failed. Error: {}", err);
+                });
+            }
+        }
+
+        for date_str in item.Dates {
+            let date_id = new_date(pool, date_str).await;
+
+            if date_id >= INIT_ID {
+                _ = sqlx::query(&myrow_to_dbassociate(
+                    "item", "date",
+                    item_id, date_id,
+                ))
+                .execute(pool)
+                .await
+                .map_err(|err| {
+                    eprintln!("Item_has_Date association failed. Error: {}", err);
+                });
+            }
+        }
+    }
+}
+
 #[allow(non_snake_case)]
 #[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Item {
@@ -475,18 +592,18 @@ pub struct Item {
     pub Description: Option<String>,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    pub Arrival: Option<NaiveDate>,
+    pub Arrival: Option<NaiveDateTime>,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    pub Expiry: Option<NaiveDate>,
+    pub Expiry: Option<NaiveDateTime>,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    pub Created: Option<NaiveDate>,
+    pub Created: Option<NaiveDateTime>,
 
     pub Tags: Vec<String>,
 
     #[serde(deserialize_with = "deserialize_naive_date_vec")]
-    pub Dates: Vec<NaiveDate>,
+    pub Dates: Vec<NaiveDateTime>,
 }
 
 #[allow(non_snake_case)]
@@ -498,7 +615,7 @@ pub struct Tag {
     pub Name: String,
 
     #[serde(deserialize_with = "deserialize_optional_naive_date")]
-    pub Created: Option<NaiveDate>,
+    pub Created: Option<NaiveDateTime>,
 }
 
 #[allow(non_snake_case)]
@@ -508,12 +625,17 @@ pub struct Date {
     pub Id: i32,
 
     #[serde(deserialize_with = "deserialize_naive_date")]
-    pub Date: NaiveDate,
+    pub Date: NaiveDateTime,
+}
+
+// (karlr 2024_02_27): I REALLY THINK I SHOULDN'T HAVE TO DO THIS!!!!
+fn to_datetime(date_str: &str) -> String {
+    format!("{} 00:00:00", date_str)
 }
 
 fn deserialize_naive_date<'de, D>(
     deserializer: D
-) -> Result<NaiveDate, D::Error>
+) -> Result<NaiveDateTime, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -521,28 +643,28 @@ where
         serde::Deserialize::deserialize(deserializer)?;
 
     if let Some(x) = date_str {
-        NaiveDate::parse_from_str(x, DT_FORMAT)
+        NaiveDateTime::parse_from_str(&to_datetime(x), DT_FORMAT)
             .map_err(serde::de::Error::custom)
     }
     else {
-        Ok(NaiveDate::default())
+        Ok(NaiveDateTime::default())
     }
 }
 
 fn deserialize_naive_date_vec<'de, D>(
     deserializer: D
-) -> Result<Vec<NaiveDate>, D::Error>
+) -> Result<Vec<NaiveDateTime>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let maybe_str_list: Option<Vec<&str>> =
         serde::Deserialize::deserialize(deserializer)?;
 
-    let mut list: Vec<NaiveDate> = vec![];
+    let mut list: Vec<NaiveDateTime> = vec![];
 
     if let Some(str_list) = maybe_str_list {
         for item in str_list {
-            match NaiveDate::parse_from_str(item, DT_FORMAT) {
+            match NaiveDateTime::parse_from_str(&to_datetime(item), DT_FORMAT) {
                 Ok(y) => list.push(y),
                 Err(_) => (),
             }
@@ -554,7 +676,7 @@ where
 
 fn deserialize_optional_naive_date<'de, D>(
     deserializer: D
-) -> Result<Option<NaiveDate>, D::Error>
+) -> Result<Option<NaiveDateTime>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -562,7 +684,7 @@ where
         serde::Deserialize::deserialize(deserializer)?;
 
     if let Some(x) = date_str {
-        NaiveDate::parse_from_str(x, DT_FORMAT)
+        NaiveDateTime::parse_from_str(&to_datetime(x), DT_FORMAT)
             .map(Some)
             .map_err(serde::de::Error::custom)
     }
@@ -642,13 +764,13 @@ impl MySqlMarshal for Item {
             Name: row.get("Name"),
             Description: row.get("Description"),
             Arrival: row
-                .try_get::<NaiveDate, &str>("Arrival")
+                .try_get::<NaiveDateTime, &str>("Arrival")
                 .ok(),
             Expiry: row
-                .try_get::<NaiveDate, &str>("Expiry")
+                .try_get::<NaiveDateTime, &str>("Expiry")
                 .ok(),
             Created: row
-                .try_get::<NaiveDate, &str>("Created")
+                .try_get::<NaiveDateTime, &str>("Created")
                 .ok(),
             Tags: vec![],
             Dates: vec![],
@@ -666,7 +788,7 @@ impl MySqlMarshal for Tag {
             Id: row.get("Id"),
             Name: row.get("Name"),
             Created: row
-                .try_get::<NaiveDate, &str>("Created")
+                .try_get::<NaiveDateTime, &str>("Created")
                 .ok(),
         }
     }
@@ -699,11 +821,11 @@ mod dbstring {
         }
     }
 
-    pub fn date_to_dbrow(date: &Option<NaiveDate>) -> String {
+    pub fn date_to_dbrow(date: &Option<NaiveDateTime>) -> String {
         match date {
             Some(s) => format!(
                 "'{}'",
-                s.format(DT_FORMAT).to_string()
+                s.format(DT_FORMAT).to_string(),
             ),
 
             None => String::from("NULL"),
@@ -711,7 +833,15 @@ mod dbstring {
     }
 
     pub fn myitem_to_dbrow(item: &Item) -> String {
+        let item_id = if item.Id >= INIT_ID {
+            item.Id.to_string()
+        }
+        else {
+            String::from("NULL")
+        };
+
         vec![
+            item_id,
             format!("'{}'", item.Name),
             string_to_dbrow(&item.Description),
             date_to_dbrow(&item.Arrival),
@@ -719,6 +849,10 @@ mod dbstring {
             date_to_dbrow(&item.Created),
         ]
         .join(",\n    ")
+    }
+
+    pub fn tagname_to_dbrow(name: &str) -> String {
+        format!("'{}'", name)
     }
 
     pub fn mytag_to_dbrow(tag: &Tag) -> String {
@@ -789,6 +923,7 @@ pub fn myitems_to_dbinsert(items: &Vec<Item>) -> String {
         .collect::<Vec<String>>();
 
     let columns = vec![
+        "Id",
         "Name",
         "Description",
         "Arrival",
@@ -817,11 +952,11 @@ ON DUPLICATE KEY UPDATE
     )
 }
 
-pub fn mydates_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
+pub fn mydates_to_dbinsert(items: &Vec<Item>) -> String {
     let mut dates = std::
         collections::
         BTreeMap::
-        <&NaiveDate, Date>::
+        <&NaiveDateTime, Date>::
         new();
 
     for item in items {
@@ -838,12 +973,11 @@ pub fn mydates_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     }
 
     format!(
-r#"INSERT IGNORE INTO `{}`.`Date` (
+r#"INSERT IGNORE INTO `Date` (
     Date
 ) VALUES (
     {}
 );"#,
-        db_name,
         dates
             .iter()
             .map(|(_, date)|
@@ -854,7 +988,7 @@ r#"INSERT IGNORE INTO `{}`.`Date` (
     )
 }
 
-pub fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
+pub fn mytags_to_dbinsert(items: &Vec<Item>) -> String {
     let mut tags = std::
         collections::
         BTreeMap::
@@ -876,13 +1010,12 @@ pub fn mytags_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
     }
 
     format!(
-r#"INSERT IGNORE INTO `{}`.`Tag` (
+r#"INSERT IGNORE INTO `Tag` (
     Name,
     Created
 ) VALUES (
     {}
 );"#,
-        db_name,
         tags
             .iter()
             .map(|(_, tag)|
@@ -895,21 +1028,20 @@ r#"INSERT IGNORE INTO `{}`.`Tag` (
 
 pub async fn add_by_name_itemhastag(
     pool: &MySqlPool,
-    db_name: &str,
     item: &str,
     tag: &str,
 ) -> anyhow::Result<u64> {
     let id = sqlx::query(
         format!(
             r#"
-INSERT INTO `{db_name}`.`Item_has_Tag`
+INSERT INTO `Item_has_Tag`
     (`Item_Id`, `Tag_Id`)
 SELECT
     a.`Id`, b.`Id`
 FROM
-    `{db_name}`.`Item` as a
+    `Item` as a
     JOIN
-    `{db_name}`.`Tag` as b
+    `Tag` as b
 WHERE
     a.`Name` = ?
     AND
@@ -933,21 +1065,20 @@ ON DUPLICATE KEY UPDATE
 
 pub async fn add_by_name_itemhasdate(
     pool: &MySqlPool,
-    db_name: &str,
     item: &str,
-    date: &NaiveDate,
+    date: &NaiveDateTime,
 ) -> anyhow::Result<u64> {
     let id = sqlx::query(
         format!(
             r#"
-INSERT INTO `{db_name}`.`Item_has_Date`
+INSERT INTO `Item_has_Date`
     (`Item_Id`, `Date_Id`)
 SELECT
     a.`Id`, b.`Id`
 FROM
-    `{db_name}`.`Item` as a
+    `Item` as a
     JOIN
-    `{db_name}`.`Date` as b
+    `Date` as b
 WHERE
     a.`Name` = ?
     AND
@@ -971,7 +1102,6 @@ ON DUPLICATE KEY UPDATE
 
 pub async fn add_list_itemhastag(
     pool: &MySqlPool,
-    db_name: &str,
     items: &Vec<Item>
 ) -> anyhow::Result<u64> {
     let mut id: u64 = 0;
@@ -980,7 +1110,6 @@ pub async fn add_list_itemhastag(
         for tag_name in &item.Tags {
             id = add_by_name_itemhastag(
                 pool,
-                db_name,
                 &item.Name,
                 tag_name
             )
@@ -993,7 +1122,6 @@ pub async fn add_list_itemhastag(
 
 pub async fn add_list_itemhasdate(
     pool: &MySqlPool,
-    db_name: &str,
     items: &Vec<Item>,
 ) -> anyhow::Result<u64> {
     let mut id: u64 = 0;
@@ -1002,7 +1130,6 @@ pub async fn add_list_itemhasdate(
         for naive_date in &item.Dates {
             id = add_by_name_itemhasdate(
                 pool,
-                db_name,
                 &item.Name,
                 naive_date,
             )
@@ -1061,8 +1188,8 @@ pub async fn reset_db(
     let root: DbRoot = serde_json::from_str(&json)
         .unwrap();
 
-    // (karlr 2024_02_20): Each file needs to be run in a
-    // separate statement in order to avoid race conditions.
+    // // (karlr 2024_02_20): Each file needs to be run in a
+    // // separate statement in order to avoid race conditions.
     run_sql_statements_from_file(&pool, &NEWDB_SQL_PATH).await;
     // run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[0]).await;
     // run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[1]).await;
@@ -1074,31 +1201,31 @@ pub async fn reset_db(
             eprintln!("Item table insert failed. Error: {}", err);
         });
 
-    _ = sqlx::query(&mytags_to_dbinsert(DB, &root.Items))
+    _ = sqlx::query(&mytags_to_dbinsert(&root.Items))
         .execute(&pool)
         .await
         .map_err(|err| {
             eprintln!("Item table insert failed. Error: {}", err);
         });
 
-    _ = add_list_itemhastag(&pool, DB, &root.Items)
+    _ = add_list_itemhastag(&pool, &root.Items)
         .await?;
 
-    _ = sqlx::query(&mydates_to_dbinsert(DB, &root.Items))
+    _ = sqlx::query(&mydates_to_dbinsert(&root.Items))
         .execute(&pool)
         .await
         .map_err(|err| {
             eprintln!("Item table insert failed. Error: {}", err);
         });
 
-    _ = add_list_itemhasdate(&pool, DB, &root.Items)
+    _ = add_list_itemhasdate(&pool, &root.Items)
         .await?;
 
     Ok((pool, root))
 }
 
 #[allow(dead_code)]
-fn itemhastag_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
+fn itemhastag_to_dbinsert(items: &Vec<Item>) -> String {
     let mut item_has_tag: Vec<String> = vec![];
 
     for item in items {
@@ -1107,14 +1234,14 @@ fn itemhastag_to_dbinsert(db_name: &str, items: &Vec<Item>) -> String {
                 .push(
                     format!(
                         r#"
-INSERT INTO `{db_name}`.`Item_has_Tag`
+INSERT INTO `Item_has_Tag`
     (`Item_Id`, `Tag_Id`)
 SELECT
     a.`Id`, b.`Id`
 FROM
-    `{db_name}`.`Item` as a
+    `Item` as a
     JOIN
-    `{db_name}`.`Tag` as b
+    `Tag` as b
 WHERE
     a.`Name` = '{}'
     AND
@@ -1410,8 +1537,8 @@ pub mod tests {
 
         let lower: &str = "2022-12-31";
 
-        let lower_as_date: NaiveDate =
-            NaiveDate::parse_from_str(lower, DT_FORMAT)
+        let lower_as_date: NaiveDateTime =
+            NaiveDateTime::parse_from_str(&to_datetime(lower), DT_FORMAT)
                 .expect("You entered the test string or date format incorrectly.");
 
         tokio_test::block_on(async {

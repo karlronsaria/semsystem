@@ -1,10 +1,50 @@
 pub mod myquery;
+pub mod app;
+
+use clap::Parser;
 
 #[allow(unused_imports)]
 use crate::myquery::*;
 
+#[allow(unused_imports)]
+use crate::app::*;
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    match load_stdin() {
+        Ok(lines) => {
+            let json: String = lines.join("\n");
+
+            match serde_json::from_str::<Vec<Item>>(&json) {
+                Ok(items) => println!("{:#?}", items),
+                Err(message) => println!("Error: {message}"),
+            }
+        },
+
+        Err(_) => {},
+    }
+
+    let args = MyCli::parse();
+    println!("{:#?}", args);
+
+
+    let opts = sqlx::mysql::MySqlConnectOptions::new()
+        .host(HOST)
+        .username(USER)
+        .password(PASS)
+        .database(DB);
+
+    let (pool, _) = reset_db(&opts)
+        .await?;
+
+    for needle in ["finance", "adventure"] {
+        println!("{:#?}", new_tag(&pool, needle).await);
+    }
+
+
+
+
+
     // let opts = sqlx::mysql::MySqlConnectOptions::new()
     //     .host(HOST)
     //     .username(USER)
@@ -15,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     //     .await?;
 
     // use sqlx::MySqlPool;
-    // use chrono::NaiveDate;
+    // use chrono::NaiveDateTime;
 
     // let opts = sqlx::mysql::MySqlConnectOptions::new()
     //     .host(HOST)
@@ -31,8 +71,8 @@ async fn main() -> anyhow::Result<()> {
 
     // let lower: &str = "2022-12-31";
 
-    // let lower_as_date: NaiveDate =
-    //     NaiveDate::parse_from_str(lower, "%Y-%m-%d")
+    // let lower_as_date: NaiveDateTime =
+    //     NaiveDateTime::parse_from_str(lower, "%Y-%m-%d")
     //         .expect("You entered the test string or date format incorrectly.");
 
     // if let Ok(pool) = MySqlPool::connect_with(opts.to_owned()).await {
@@ -76,69 +116,86 @@ async fn main() -> anyhow::Result<()> {
     // let temp: String = myrow_to_dbassociate("item", "tag", 5, 2);
     // println!("{temp}");
 
-    let opts = sqlx::mysql::MySqlConnectOptions::new()
-        .host(HOST)
-        .username(USER)
-        .password(PASS)
-        .database(DB);
 
-    use sqlx::Row;
 
-    if let Ok((pool, _)) = reset_db(&opts).await {
-        match sqlx::query(format!(" SELECT Levenshtein('what', 'tahw');").as_str())
-            .fetch_all(&pool)
-            .await {
-                Err(msg) => {
-                    eprintln!("Error: {}", msg);
-                },
 
-                Ok(rows) => {
-                    let what = rows.into_iter()
-                        .map(|row| row.get(0))
-                        .collect::<Vec<i32>>();
+    // todo
 
-                    println!("{}", what[0]);
-                }
-            };
+    // let opts = sqlx::mysql::MySqlConnectOptions::new()
+    //     .host(HOST)
+    //     .username(USER)
+    //     .password(PASS)
+    //     .database(DB);
 
-        match sqlx::query(
-            format!(
-                " SELECT *, Levenshtein(name, '?') AS dist FROM item ORDER BY dist, `Id`;")
-                    .as_str()
-            )
-            .bind("Finance")
-            .fetch_all(&pool)
-            .await {
-                Err(msg) => {
-                    eprintln!("Error: {}", msg);
-                },
+    // use sqlx::Row;
 
-                Ok(rows) => {
-                    let what = rows.into_iter()
-                        .map(|row| row.get("dist"))
-                        .collect::<Vec<i32>>();
+    // if let Ok((pool, _)) = reset_db(&opts).await {
+    //     match sqlx::query(format!(" SELECT Levenshtein('what', 'tahw');").as_str())
+    //         .fetch_all(&pool)
+    //         .await {
+    //             Err(msg) => {
+    //                 eprintln!("Error: {}", msg);
+    //             },
 
-                    println!("{}", what[0]);
-                }
-            };
+    //             Ok(rows) => {
+    //                 let what = rows.into_iter()
+    //                     .map(|row| row.get(0))
+    //                     .collect::<Vec<i32>>();
 
-        for x in Query::builder(&pool)
-            .from("item")
-            .build()
-            .to_fuzzy::<Item>(
-                "name",
-                "Finance Statement 00",
-                None,
-            )
-            .await
-        {
-            match x {
-                Dist::<Item> { distance, payload } => {
-                    println!("{distance}: {}", payload.Name);
-                }
-            }
-        }
-    }
+    //                 println!("{}", what[0]);
+    //             }
+    //         };
+
+    //     let query = format!(
+    //         " SELECT *, Levenshtein(name, '?') AS dist FROM item ORDER BY dist, `Id`;"
+    //     );
+
+    //     let query = sqlx::query(query.as_str());
+
+    //     match query
+    //         .bind("Finance")
+    //         .fetch_all(&pool)
+    //         .await {
+    //             Err(msg) => {
+    //                 eprintln!("Error: {}", msg);
+    //             },
+
+    //             Ok(rows) => {
+    //                 let what = rows.into_iter()
+    //                     .map(|row| row.get("dist"))
+    //                     .collect::<Vec<i32>>();
+
+    //                 println!("{}", what[0]);
+    //             }
+    //         };
+
+    //     for needle in [
+    //         "Finance Statement 00",
+    //         "Auto Claim - Januayr 2023.pdf",
+    //         "zzzzzzzzzzzzzzzzzzzzzz",
+    //     ] {
+    //         println!("\n[");
+
+    //         for x in Query::builder(&pool)
+    //             .from("item")
+    //             .build()
+    //             .to_fuzzy::<Item>(
+    //                 "name",
+    //                 needle,
+    //                 None,
+    //             )
+    //             .await
+    //         {
+    //             match x {
+    //                 Dist::<Item> { distance, payload } => {
+    //                     println!("{distance}: {} {}", payload.Id, payload.Name);
+    //                 }
+    //             }
+    //         }
+
+    //         println!("]\n");
+    //     }
+    // }
 
     Ok(())
 }

@@ -1,0 +1,63 @@
+{
+"Test": {
+    "FuzzySearch": [
+        {
+            "Haystack": "Name",
+            "Needle": "Finance Statement 00",
+            "Expected": [
+                {
+                    "Id": 1,
+                    "Distance": 7
+                },
+                {
+                    "Id": 2,
+                    "Distance": 7
+                },
+                {
+                    "Id": 3,
+                    "Distance": 7
+                },
+                {
+                    "Id": 4,
+                    "Distanve": 7
+                }
+            ]
+        },
+        {
+            "Haystack": "Name",
+            "Needle": "Auto Claim - Januayr 2023.pdf",
+            "Expected": [
+                {
+                    "Id": 6,
+                    "Distance": 6
+                },
+                {
+                    "Id": 5,
+                    "Distance": 12
+                },
+                {
+                    "Id": 3,
+                    "Distance": 21
+                },
+                {
+                    "Id": 4,
+                    "Distance": 21
+                },
+                {
+                    "Id": 1,
+                    "Distance": 22
+                },
+                {
+                    "Id": 2,
+                    "Distanve": 22
+                }
+            ]
+        },
+        {
+            "Haystack": "Name",
+            "Needle": "zzzzzzzzzzzzzzzzzzzzzz",
+            "Expected": []
+        }
+    ]
+}
+}
