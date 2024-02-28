@@ -60,30 +60,34 @@ pub enum Agg {
     Intersect,
 }
 
+impl Default for Agg {
+    fn default() -> Agg { Agg::Union }
+}
+
 fn get_haystack_and_needle<'a>(
     when: When<(&'a str, &'a str)>
 ) -> (String, String) {
     let (search_expr, needle) = match when {
         When::Equal((x, y)) =>
-            (String::from(format!("`{x}` REGEXP CONCAT('^', ?, '$')")), y.to_string()),
+            (format!("`{x}` REGEXP CONCAT('^', ?, '$')"), y),
 
         When::Like((x, y)) =>
-            (String::from(format!("`{x}` REGEXP CONCAT('^', ?)")), y.to_string()),
+            (format!("`{x}` REGEXP CONCAT('^', ?)"), y),
 
         When::Match((x, y)) =>
-            (String::from(format!("`{x}` REGEXP ?")), y.to_string()),
+            (format!("`{x}` REGEXP ?"), y),
 
         When::Less((x, y)) =>
-            (String::from(format!("`{x}` < ?")), y.to_string()),
+            (format!("`{x}` < ?"), y),
 
         When::Greater((x, y)) =>
-            (String::from(format!("`{x}` > ?")), y.to_string()),
+            (format!("`{x}` > ?"), y),
 
         When::AtMost((x, y)) =>
-            (String::from(format!("`{x}` <= ?")), y.to_string()),
+            (format!("`{x}` <= ?"), y),
 
         When::AtLeast((x, y)) =>
-            (String::from(format!("`{x}` >= ?")), y.to_string()),
+            (format!("`{x}` >= ?"), y),
 
         When::Other(_) => {
             eprintln!(
@@ -94,11 +98,11 @@ fn get_haystack_and_needle<'a>(
         },
     };
 
-    (search_expr, needle)
+    (String::from(search_expr), needle.to_string())
 }
 
 fn get_minus_str(
-    minus: &Vec<i32>
+    minus: &[i32]
 ) -> String {
     minus
         .iter()
@@ -196,12 +200,18 @@ pub struct Query<'a> {
 }
 
 impl<'a> Query<'a> {
-    pub fn builder(pool: &'a MySqlPool) -> QueryBuilder::<'a> {
-        QueryBuilder::<'a>::new(pool)
+    fn new(pool: &'a MySqlPool) -> QueryBuilder<'a> {
+        QueryBuilder {
+            pool,
+            from: "", // String::new(),
+            when: vec![],
+            minus: None,
+            aggregate: Agg::Union,
+        }
     }
 
     pub async fn to_complete_item(&self, item: Item) -> Item {
-        let tags = Query::builder(self.pool)
+        let tags = Query::new(self.pool)
             .from("item")
             .when(&vec![When::Equal(("id", &item.Id.to_string()))])
             .build()
@@ -211,7 +221,7 @@ impl<'a> Query<'a> {
             .map(|tag| tag.Name)
             .collect::<Vec<String>>();
 
-        let dates = Query::builder(self.pool)
+        let dates = Query::new(self.pool)
             .from("item")
             .when(&vec![When::Equal(("id", &item.Id.to_string()))])
             .build()
@@ -434,44 +444,42 @@ pub struct QueryBuilder<'a> {
 }
 
 impl<'a> QueryBuilder<'a> {
-    pub const DEFAULT_STR: &'static str = "";
-
     pub fn new(pool: &'a MySqlPool) -> Self {
         QueryBuilder {
             pool: pool,
-            from: Self::DEFAULT_STR,
+            from: "",
             when: vec![When::<(&str, &str)>::default()],
             minus: None,
             aggregate: Agg::Union,
         }
     }
 
-    pub fn pool(&'a mut self, pool: &'a MySqlPool) -> &'a mut Self {
+    pub fn pool(mut self, pool: &'a MySqlPool) -> Self {
         self.pool = pool;
         self
     }
 
-    pub fn from(&'a mut self, from: &'a str) -> &'a mut Self {
+    pub fn from(mut self, from: &'a str) -> Self {
         self.from = from;
         self
     }
 
-    pub fn when(&'a mut self, when: &'a Vec<When<(&'a str, &'a str)>>) -> &'a mut Self {
+    pub fn when(mut self, when: &'a Vec<When<(&'a str, &'a str)>>) -> Self {
         self.when = when.clone();
         self
     }
 
-    pub fn minus(&'a mut self, minus: Option<&'a Vec<i32>>) -> &'a mut Self {
+    pub fn minus(mut self, minus: Option<&'a Vec<i32>>) -> Self {
         self.minus = minus.clone();
         self
     }
 
-    pub fn aggregate(&'a mut self, aggregate: Agg) -> &'a mut Self {
+    pub fn aggregate(mut self, aggregate: Agg) -> Self {
         self.aggregate = aggregate.clone();
         self
     }
 
-    pub fn build(&'a self) -> Query<'a> {
+    pub fn build(self) -> Query<'a> {
         Query {
             pool: self.pool,
             from: self.from,
@@ -505,13 +513,13 @@ pub async fn new_tag(pool: &MySqlPool, name: &str) -> i32 {
     }
 }
 
-pub async fn new_date(pool: &MySqlPool, date: &str) -> i32 {
-    let datetime: String = to_datetime(date);
+pub async fn new_date(pool: &MySqlPool, date: NaiveDateTime) -> i32 {
+    // let datetime: String = to_datetime(date);
 
     let result = sqlx::query(
         &format!(
             "SELECT `Id` FROM `Date` WHERE `Name` = '{}';",
-            datetime,
+            date,
         )
     )
     .fetch_one(pool)
@@ -523,7 +531,7 @@ pub async fn new_date(pool: &MySqlPool, date: &str) -> i32 {
         Err(_) => match sqlx::query(
             &format!(
                 "INSERT IGNORE INTO `Date` (`Date`) VALUES ('{}');",
-                datetime,
+                date,
             )
         )
         .execute(pool)
@@ -534,21 +542,27 @@ pub async fn new_date(pool: &MySqlPool, date: &str) -> i32 {
     }
 }
 
-pub fn add_items(
+pub async fn add_items(
     pool: &MySqlPool,
-    items: &Vec<Item>,
+    items: &[Item],
 ) -> Vec<i32> {
+    let mut ids: Vec<i32> = vec![];
+
     for item in items {
-        let result = sqlx::query(&myitems_to_dbinsert([item]))
-            .execute(&pool)
+        let result = sqlx::query(&myitems_to_dbinsert(&[item.clone()]))
+            .execute(pool)
             .await
             .map_err(|err| {
                 eprintln!("Item table insert failed. Error: {}", err);
             });
 
-        let item_id = result.last_insert_id();
+        let item_id: i32 = result
+            .expect("Query failed")
+            .last_insert_id()
+            .try_into()
+            .unwrap();
 
-        for tag_name in item.Tags {
+        for tag_name in &item.Tags {
             let tag_id = new_tag(pool, tag_name).await;
 
             if tag_id >= INIT_ID {
@@ -564,8 +578,8 @@ pub fn add_items(
             }
         }
 
-        for date_str in item.Dates {
-            let date_id = new_date(pool, date_str).await;
+        for date in &item.Dates {
+            let date_id = new_date(pool, *date).await;
 
             if date_id >= INIT_ID {
                 _ = sqlx::query(&myrow_to_dbassociate(
@@ -579,7 +593,11 @@ pub fn add_items(
                 });
             }
         }
+
+        ids.push(item_id);
     }
+
+    ids
 }
 
 #[allow(non_snake_case)]
@@ -816,7 +834,13 @@ mod dbstring {
 
     pub fn string_to_dbrow(input: &Option<String>) -> String {
         match input {
-            Some(s) => format!("'{}'", s),
+            Some(s) => if s.is_empty() {
+                String::from("NULL")
+            }
+            else {
+                format!("'{}'", s)
+            },
+
             None => String::from("NULL"),
         }
     }
@@ -849,10 +873,6 @@ mod dbstring {
             date_to_dbrow(&item.Created),
         ]
         .join(",\n    ")
-    }
-
-    pub fn tagname_to_dbrow(name: &str) -> String {
-        format!("'{}'", name)
     }
 
     pub fn mytag_to_dbrow(tag: &Tag) -> String {
@@ -916,7 +936,7 @@ AND `{property_table}_Id` = {property_id};"#
     )
 }
 
-pub fn myitems_to_dbinsert(items: &Vec<Item>) -> String {
+pub fn myitems_to_dbinsert(items: &[Item]) -> String {
     let values = items
         .iter()
         .map(|x| dbstring::myitem_to_dbrow(x))
@@ -952,7 +972,7 @@ ON DUPLICATE KEY UPDATE
     )
 }
 
-pub fn mydates_to_dbinsert(items: &Vec<Item>) -> String {
+pub fn mydates_to_dbinsert(items: &[Item]) -> String {
     let mut dates = std::
         collections::
         BTreeMap::
@@ -988,7 +1008,7 @@ r#"INSERT IGNORE INTO `Date` (
     )
 }
 
-pub fn mytags_to_dbinsert(items: &Vec<Item>) -> String {
+pub fn mytags_to_dbinsert(items: &[Item]) -> String {
     let mut tags = std::
         collections::
         BTreeMap::
@@ -1102,7 +1122,7 @@ ON DUPLICATE KEY UPDATE
 
 pub async fn add_list_itemhastag(
     pool: &MySqlPool,
-    items: &Vec<Item>
+    items: &[Item]
 ) -> anyhow::Result<u64> {
     let mut id: u64 = 0;
 
@@ -1122,7 +1142,7 @@ pub async fn add_list_itemhastag(
 
 pub async fn add_list_itemhasdate(
     pool: &MySqlPool,
-    items: &Vec<Item>,
+    items: &[Item],
 ) -> anyhow::Result<u64> {
     let mut id: u64 = 0;
 
@@ -1225,7 +1245,7 @@ pub async fn reset_db(
 }
 
 #[allow(dead_code)]
-fn itemhastag_to_dbinsert(items: &Vec<Item>) -> String {
+fn itemhastag_to_dbinsert(items: &[Item]) -> String {
     let mut item_has_tag: Vec<String> = vec![];
 
     for item in items {
@@ -1392,9 +1412,9 @@ pub mod tests {
             When::Match((by, needle)),
         ];
 
-        let mut builder = Query::builder(&pool);
+        // let mut builder = Query::new(&pool);
 
-        let query = builder
+        let query = Query::new(&pool)
             .from(&from)
             .when(&when)
             .build();
@@ -1441,7 +1461,7 @@ pub mod tests {
                     None => expected,
                 };
 
-                let actual = Query::builder(&pool)
+                let actual = Query::new(&pool)
                     .from("tag")
                     .when(&vec![When::Equal(("name", "finance"))])
                     .minus(Some(&minus))
@@ -1476,7 +1496,7 @@ pub mod tests {
                     .filter(|x| x.Name.starts_with("Auto Claim"))
                     .collect();
 
-                let actual = Query::builder(&pool)
+                let actual = Query::new(&pool)
                     .from("tag")
                     .when(&vec![When::Match(("name", "auto|claim"))])
                     .aggregate(Agg::Intersect)
@@ -1556,7 +1576,7 @@ pub mod tests {
                     })
                     .collect();
 
-                let actual = Query::builder(&pool)
+                let actual = Query::new(&pool)
                     .from("date")
                     .when(&vec![When::Greater(("date", lower))])
                     .build()
