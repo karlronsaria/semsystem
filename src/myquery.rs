@@ -1,5 +1,6 @@
 use sqlx::{mysql::MySqlPool, mysql::MySqlRow, Row};
 use chrono::NaiveDateTime;
+use clap::Args;
 
 pub const INIT_ID: i32 = 1;
 pub const MAIN_TABLE: &str = "item";
@@ -68,26 +69,13 @@ fn get_haystack_and_needle<'a>(
     when: When<(&'a str, &'a str)>
 ) -> (String, String) {
     let (search_expr, needle) = match when {
-        When::Equal((x, y)) =>
-            (format!("`{x}` REGEXP CONCAT('^', ?, '$')"), y),
-
-        When::Like((x, y)) =>
-            (format!("`{x}` REGEXP CONCAT('^', ?)"), y),
-
-        When::Match((x, y)) =>
-            (format!("`{x}` REGEXP ?"), y),
-
-        When::Less((x, y)) =>
-            (format!("`{x}` < ?"), y),
-
-        When::Greater((x, y)) =>
-            (format!("`{x}` > ?"), y),
-
-        When::AtMost((x, y)) =>
-            (format!("`{x}` <= ?"), y),
-
-        When::AtLeast((x, y)) =>
-            (format!("`{x}` >= ?"), y),
+        When::Equal((x, y)) => (format!("`{x}` REGEXP CONCAT('^', ?, '$')"), y),
+        When::Like((x, y)) => (format!("`{x}` REGEXP CONCAT('^', ?)"), y),
+        When::Match((x, y)) => (format!("`{x}` REGEXP ?"), y),
+        When::Less((x, y)) => (format!("`{x}` < ?"), y),
+        When::Greater((x, y)) => (format!("`{x}` > ?"), y),
+        When::AtMost((x, y)) => (format!("`{x}` <= ?"), y),
+        When::AtLeast((x, y)) => (format!("`{x}` >= ?"), y),
 
         When::Other(_) => {
             eprintln!(
@@ -145,6 +133,9 @@ fn new_query_str<'a>(
                     return None;
                 };
 
+            // (karlr 2024_03_03): Foreign keys like ``Item_Id`` and
+            // ``Tag_Id`` at the moment only appear in the association
+            // table and should not be seen anywhere else.
             let from_table_str: String =
                 format!(
                     "`{to}` LEFT JOIN `item_has_{other_table}` ON `Id` = `{to}_Id`"
@@ -166,7 +157,7 @@ fn new_query_str<'a>(
             (
                 query.0.to_string(),
                 format!(
-                    "{} and `{to}_Id` not in ({})",
+                    "{} and `{to}`.`Id` not in ({})",
                     query.1,
                     get_minus_str(exclude_ids),
                 ),
@@ -200,10 +191,10 @@ pub struct Query<'a> {
 }
 
 impl<'a> Query<'a> {
-    fn new(pool: &'a MySqlPool) -> QueryBuilder<'a> {
+    pub fn new(pool: &'a MySqlPool) -> QueryBuilder<'a> {
         QueryBuilder {
             pool,
-            from: "", // String::new(),
+            from: "",
             when: vec![],
             minus: None,
             aggregate: Agg::Union,
@@ -271,7 +262,8 @@ impl<'a> Query<'a> {
         &self,
         haystack: &str,
         needle: &str,
-        minus: Option<&Vec<i32>>,
+        // todo
+        // // minus: Option<&Vec<i32>>,
     ) -> Vec<Dist<T>>
     where
         T: MySqlMarshal
@@ -282,10 +274,10 @@ impl<'a> Query<'a> {
         let col = T::col_name();
         let to = T::table_name();
 
-        let exclude_ids = match minus {
+        let exclude_ids = match self.minus {
             Some(exclude_ids) if exclude_ids.len() > 0 =>
                 format!(
-                    "`{to}_Id` NOT IN ({}) AND ",
+                    "`{to}`.`Id` NOT IN ({}) AND ",
                     get_minus_str(exclude_ids),
                 ),
 
@@ -365,20 +357,18 @@ ORDER BY
                 .len();
         }
 
-        let haystacks: String = haystacks.join(" AND ");
-
-        let query = new_query_str(
+        match new_query_str(
             self.from,
             to.as_str(),
-            haystacks,
+            haystacks.join(" AND "),
             minus,
-        );
-
-        if let Some((from, where_clause, countby_col)) = query {
-            // link
-            // - url: <https://stackoverflow.com/questions/41887460/select-list-is-not-in-group-by-clause-and-contains-nonaggregated-column-inc>
-            // - retrieved: 2024_02_18
-            let query = format!(
+        ) {
+            None => vec![],
+            Some((from, where_clause, countby_col)) => {
+                // link
+                // - url: <https://stackoverflow.com/questions/41887460/select-list-is-not-in-group-by-clause-and-contains-nonaggregated-column-inc>
+                // - retrieved: 2024_02_18
+                let query = format!(
 r#"SELECT {} FROM `{}` WHERE `Id` IN (
     SELECT `Id`
     FROM
@@ -389,45 +379,43 @@ r#"SELECT {} FROM `{}` WHERE `Id` IN (
         `Id`{}
 )
 ORDER BY `Id`;"#,
-                T::col_name(),
-                to,
-                from,
-                where_clause,
-                match self.aggregate {
-                    Agg::Union => String::new(),
-                    Agg::Intersect => format!(
-                        " HAVING COUNT(DISTINCT {countby_col}) = {}",
-                        true_number_of_needles,
-                    ),
-                },
-            );
-
-            // // todo
-            // println!("\n{}", query);
-            // println!("? = {:#?}\n", needles);
-
-            let mut query = sqlx::query(query.as_str());
-
-            for needle in needles {
-                query = query.bind(needle.clone())
-            }
-
-            match query
-                .fetch_all(self.pool)
-                .await {
-                    Err(msg) => {
-                        eprintln!("Error: {}", msg);
-                        vec![]
+                    T::col_name(),
+                    to,
+                    from,
+                    where_clause,
+                    match self.aggregate {
+                        Agg::Union => String::new(),
+                        Agg::Intersect => format!(
+                            " HAVING COUNT(DISTINCT {countby_col}) = {}",
+                            true_number_of_needles,
+                        ),
                     },
+                );
 
-                    Ok(rows) => rows
-                        .into_iter()
-                        .map(|row| T::marshal(row))
-                        .collect::<Vec<T>>(),
+                // // todo
+                // println!("\n{}", query);
+                // println!("? = {:#?}\n", needles);
+
+                let mut query = sqlx::query(query.as_str());
+
+                for needle in needles {
+                    query = query.bind(needle.clone())
                 }
-        }
-        else {
-            vec![]
+
+                match query
+                    .fetch_all(self.pool)
+                    .await {
+                        Err(msg) => {
+                            eprintln!("Error: {}", msg);
+                            vec![]
+                        },
+
+                        Ok(rows) => rows
+                            .into_iter()
+                            .map(|row| T::marshal(row))
+                            .collect::<Vec<T>>(),
+                    }
+            },
         }
     }
 }
@@ -446,7 +434,7 @@ pub struct QueryBuilder<'a> {
 impl<'a> QueryBuilder<'a> {
     pub fn new(pool: &'a MySqlPool) -> Self {
         QueryBuilder {
-            pool: pool,
+            pool,
             from: "",
             when: vec![When::<(&str, &str)>::default()],
             minus: None,
@@ -514,8 +502,6 @@ pub async fn new_tag(pool: &MySqlPool, name: &str) -> i32 {
 }
 
 pub async fn new_date(pool: &MySqlPool, date: NaiveDateTime) -> i32 {
-    // let datetime: String = to_datetime(date);
-
     let result = sqlx::query(
         &format!(
             "SELECT `Id` FROM `Date` WHERE `Name` = '{}';",
@@ -601,54 +587,99 @@ pub async fn add_items(
 }
 
 #[allow(non_snake_case)]
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Args, serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Item {
+    #[clap(short, long)]
+    #[arg(default_value_t = -1)]
     #[serde(default)]
     pub Id: i32,
 
+    #[clap(short, long)]
+    #[arg(default_value_t = String::new())]
+    #[serde(default)]
     pub Name: String,
+
+    #[clap(short, long)]
+    #[serde(default)]
     pub Description: Option<String>,
 
-    #[serde(deserialize_with = "deserialize_optional_naive_date")]
+    #[clap(short, long)]
+    #[arg(value_parser = parse_naive_date_time)]
+    #[serde(default, deserialize_with = "deserialize_optional_naive_date")]
     pub Arrival: Option<NaiveDateTime>,
 
-    #[serde(deserialize_with = "deserialize_optional_naive_date")]
+    #[clap(short, long)]
+    #[arg(value_parser = parse_naive_date_time)]
+    #[serde(default, deserialize_with = "deserialize_optional_naive_date")]
     pub Expiry: Option<NaiveDateTime>,
 
-    #[serde(deserialize_with = "deserialize_optional_naive_date")]
+    #[clap(short, long)]
+    #[arg(value_parser = parse_naive_date_time)]
+    #[serde(default, deserialize_with = "deserialize_optional_naive_date")]
     pub Created: Option<NaiveDateTime>,
 
+    #[clap(skip)]
+    #[arg(value_parser = parse_tag)]
+    #[serde(default)]
     pub Tags: Vec<String>,
 
-    #[serde(deserialize_with = "deserialize_naive_date_vec")]
+    #[clap(skip)]
+    #[arg(value_parser = parse_date)]
+    #[serde(default, deserialize_with = "deserialize_naive_date_vec")]
     pub Dates: Vec<NaiveDateTime>,
 }
 
 #[allow(non_snake_case)]
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Args, serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Tag {
+    #[clap(short, long)]
+    #[arg(default_value_t = -1)]
     #[serde(default)]
     pub Id: i32,
 
+    #[clap(short, long)]
+    #[arg(default_value_t = String::new())]
+    #[serde(default)]
     pub Name: String,
 
-    #[serde(deserialize_with = "deserialize_optional_naive_date")]
+    #[clap(short, long)]
+    #[arg(value_parser = parse_naive_date_time)]
+    #[serde(default, deserialize_with = "deserialize_optional_naive_date")]
     pub Created: Option<NaiveDateTime>,
 }
 
 #[allow(non_snake_case)]
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Args, serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Date {
+    #[clap(short, long)]
+    #[arg(default_value_t = -1)]
     #[serde(default)]
     pub Id: i32,
 
-    #[serde(deserialize_with = "deserialize_naive_date")]
+    #[clap(short, long)]
+    #[arg(value_parser = parse_naive_date_time)]
+    #[serde(default, deserialize_with = "deserialize_naive_date")]
     pub Date: NaiveDateTime,
 }
 
 // (karlr 2024_02_27): I REALLY THINK I SHOULDN'T HAVE TO DO THIS!!!!
 fn to_datetime(date_str: &str) -> String {
     format!("{} 00:00:00", date_str)
+}
+
+pub fn parse_naive_date_time(date_str: &str) -> chrono::format::ParseResult<NaiveDateTime> {
+    NaiveDateTime::parse_from_str(&to_datetime(date_str), DT_FORMAT)
+}
+
+fn parse_tag(name: &str) -> anyhow::Result<Tag> {
+    Ok(Tag { Id: -1, Name: name.to_string(), Created: None, })
+}
+
+fn parse_date(date_str: &str) -> anyhow::Result<Date> {
+    match NaiveDateTime::parse_from_str(&to_datetime(date_str), DT_FORMAT) {
+        Ok(parse) => Ok(Date { Id: -1, Date: parse, }),
+        Err(message) => Err(message.into()),
+    }
 }
 
 fn deserialize_naive_date<'de, D>(
@@ -723,7 +754,7 @@ pub struct Id<T> {
     phantom: std::marker::PhantomData<T>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Dist<T> {
     pub distance: i32,
     pub payload: T,
@@ -1411,8 +1442,6 @@ pub mod tests {
             When::Like((by, needle)),
             When::Match((by, needle)),
         ];
-
-        // let mut builder = Query::new(&pool);
 
         let query = Query::new(&pool)
             .from(&from)

@@ -1,33 +1,70 @@
 use atty::Stream;
+use std::io::{self, BufRead};
 
 #[allow(unused_imports)]
 use clap::{Parser, Args, Subcommand};
 
-use std::io::{self, BufRead};
-
-#[derive(Parser, Debug)]
-#[command(author, version)]
-#[command(about = "todo: Um, Hi! 🙂")]
+use crate::myquery;
 
 /// Command Me!
-pub struct MyCli {
+#[derive(Parser, Debug)]
+#[command(author, version, about = "todo: Um, Hi! 🙂")]
+pub struct Cli {
+    /// todo
     #[command(subcommand)]
-    command: Option<Command>,
+    pub command: Option<Command>,
 }
 
+/// todo
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// todo
-    Add,
+    Search(Query),
 
     /// todo
-    Remove,
+    #[command(subcommand)]
+    Item(GetItem),
+
+    /// todo
+    Tag {
+        names: Vec<String>,
+    },
+
+    /// todo
+    Date {
+        #[arg(value_parser = myquery::parse_naive_date_time)]
+        r#in: Option<Vec<chrono::NaiveDateTime>>,
+
+        #[arg(long, value_parser = myquery::parse_naive_date_time)]
+        before: Option<chrono::NaiveDateTime>,
+
+        #[arg(long, value_parser = myquery::parse_naive_date_time)]
+        after: Option<chrono::NaiveDateTime>,
+
+        #[arg(long, value_parser = myquery::parse_naive_date_time)]
+        atleast: Option<chrono::NaiveDateTime>,
+
+        #[arg(long, value_parser = myquery::parse_naive_date_time)]
+        atmost: Option<chrono::NaiveDateTime>,
+    },
 }
 
-// #[derive(Args, Debug)]
-// pub struct What {
-//     string: Option<String>,
-// }
+/// todo
+#[derive(Subcommand, Debug)]
+pub enum GetItem {
+    /// todo
+    Id { id: i32 },
+
+    /// todo
+    Name { name: String },
+}
+
+/// todo
+#[derive(Args, Debug)]
+pub struct Query {
+    /// todo
+    pub strings: Vec<String>,
+}
 
 pub fn load_stdin() -> io::Result<Vec<String>> {
     if atty::is(Stream::Stdin) {
@@ -42,10 +79,6 @@ pub fn load_stdin() -> io::Result<Vec<String>> {
         lines.push(line);
     }
 
-    return Ok(lines);
+    Ok(lines)
 }
-
-
-
-
 

@@ -3,42 +3,200 @@ pub mod app;
 
 use clap::Parser;
 
-#[allow(unused_imports)]
-use crate::myquery::*;
-
-#[allow(unused_imports)]
-use crate::app::*;
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    match load_stdin() {
+    let pipe = match app::load_stdin() {
         Ok(lines) => {
             let json: String = lines.join("\n");
 
-            match serde_json::from_str::<Vec<Item>>(&json) {
-                Ok(items) => println!("{:#?}", items),
-                Err(message) => println!("Error: {message}"),
+            match serde_json::from_str::<Vec<myquery::Item>>(&json) {
+                Ok(items) => Some(items),
+                Err(_) => match serde_json::from_str::<myquery::Item>(&json) {
+                    Ok(item) => Some(vec![item]),
+                    Err(message) => {
+                        eprintln!("Error: {message}");
+                        None
+                    },
+                }
             }
         },
 
-        Err(_) => {},
-    }
-
-    let args = MyCli::parse();
-    println!("{:#?}", args);
-
+        Err(_) => None,
+    };
 
     let opts = sqlx::mysql::MySqlConnectOptions::new()
-        .host(HOST)
-        .username(USER)
-        .password(PASS)
-        .database(DB);
+        .host(myquery::HOST)
+        .username(myquery::USER)
+        .password(myquery::PASS)
+        .database(myquery::DB);
 
-    let (pool, _) = reset_db(&opts)
+    let (pool, _) = myquery::reset_db(&opts)
         .await?;
 
+    let args = app::Cli::parse();
+
+    match args.command {
+        None => {},
+        Some(ref what) => match what {
+            app::Command::Search(query) => {
+                let needle = query.strings.join("|");
+
+                let items = myquery::Query::new(&pool)
+                    .from("item")
+                    .when(&vec![
+                        myquery::When::Like(("name", &needle))
+                    ])
+                    .build()
+                    .to_complete_items()
+                    .await;
+
+                let mut minus: Vec<i32> = vec![];
+
+                println!("\nItems with names like: \"{needle}*\"");
+
+                for item in items {
+                    println!("  {} {}", item.Id, item.Name);
+
+                    for subneedle in &query.strings {
+                        let subneedle = subneedle.to_lowercase();
+
+                        if item.Tags.contains(&subneedle) {
+                            println!("    Has tag: {subneedle}");
+                        }
+                    }
+
+                    minus.push(item.Id);
+                }
+
+                let items = myquery::Query::new(&pool)
+                    .from("item")
+                    .when(&vec![
+                        myquery::When::Match(("name", &needle))
+                    ])
+                    .minus(Some(&minus))
+                    .build()
+                    .to::<myquery::Item>()
+                    .await;
+
+                println!("\nItems with names matching: /{needle}/");
+
+                for item in items {
+                    println!("  {} {}", item.Id, item.Name);
+
+                    for subneedle in &query.strings {
+                        let subneedle = subneedle.to_lowercase();
+
+                        if item.Tags.contains(&subneedle) {
+                            println!("    Has tag: {subneedle}");
+                        }
+                    }
+
+                    minus.push(item.Id);
+                }
+
+                let items = myquery::Query::new(&pool)
+                    .from("tag")
+                    .when(&vec![
+                        myquery::When::Equal(("name", &needle.to_lowercase()))
+                    ])
+                    .minus(Some(&minus))
+                    .build()
+                    .to::<myquery::Item>()
+                    .await;
+
+                println!("\nItems with tag: \"{}\"", needle.to_lowercase());
+
+                for item in items {
+                    println!("  {} {}", item.Id, item.Name);
+                    minus.push(item.Id);
+                }
+
+                for search_str in &query.strings {
+                    println!("\nFuzzy name search with: \"{search_str}\"");
+
+                    let fuzzy = myquery::Query::new(&pool)
+                        .from("item")
+                        .minus(Some(&minus))
+                        .build()
+                        .to_fuzzy::<myquery::Item>(
+                            "name",
+                            &search_str,
+                        )
+                        .await;
+
+                    for dist in fuzzy {
+                        println!(
+                            "  {} {} {}",
+                            dist.distance,
+                            dist.payload.Id,
+                            dist.payload.Name
+                        );
+
+                        minus.push(dist.payload.Id);
+                    }
+                }
+
+                println!();
+
+    //     let actual = Query::builder(&pool)
+    //         .from("date")
+    //         .when(&vec![When::Greater(("date", lower))])
+    //         .build()
+    //         .to_complete_items()
+    //         .await;
+            },
+
+            app::Command::Item(get_item) => match get_item {
+                app::GetItem::Id { id } => println!("Get item by id: {id}"),
+                app::GetItem::Name { name } => println!("Get item by name: {name}"),
+            },
+
+            app::Command::Tag { names } => for name in names {
+                println!("Tag: {name}");
+            },
+
+            app::Command::Date {
+                r#in,
+                before,
+                after,
+                atleast,
+                atmost,
+            } => {
+                match r#in {
+                    None => {},
+                    Some(x) => for y in x {
+                        println!("In: {y}");
+                    },
+                };
+
+                match before {
+                    None => {},
+                    Some(x) => println!("Before: {x}"),
+                };
+
+                match after {
+                    None => {},
+                    Some(x) => println!("After: {x}"),
+                };
+
+                match atleast {
+                    None => {},
+                    Some(x) => println!("At least: {x}"),
+                };
+
+                match atmost {
+                    None => {},
+                    Some(x) => println!("At most: {x}"),
+                };
+            },
+        },
+    };
+
+    println!("{:#?}", pipe);
+    println!("{:#?}", args);
+
     for needle in ["finance", "adventure"] {
-        println!("{:#?}", new_tag(&pool, needle).await);
+        println!("{:#?}", myquery::new_tag(&pool, needle).await);
     }
 
 
