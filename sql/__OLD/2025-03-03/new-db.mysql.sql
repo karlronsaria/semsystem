@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS `Item_has_Date` (
   `Date_Id` INT NOT NULL,
   PRIMARY KEY (`Date_Id`, `Item_Id`),
   INDEX `fk_Item_has_Date_Date1_idx` (`Date_Id` ASC) VISIBLE,
-  INDEX `fk_Item_has_Date_Item_idx` (`Item_Id` ASC) VISIBLE,
-  CONSTRAINT `fk_Item_has_Date_Item`
+  INDEX `fk_Item_has_Date_Item1_idx` (`Item_Id` ASC) VISIBLE,
+  CONSTRAINT `fk_Item_has_Date_Item1`
     FOREIGN KEY (`Item_Id`)
     REFERENCES `Item` (`Id`)
     ON DELETE CASCADE
