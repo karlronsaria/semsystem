@@ -9,39 +9,39 @@ INSERT INTO `mydb`.`Item` (
 ) VALUES (
     'Finance Statement 000.pdf',
     NULL,
-    STR_TO_DATE('2023_10_01', '%Y_%m_%d'),
+    STR_TO_DATE('2023-10-01', '%Y-%m-%d'),
     NULL,
-    STR_TO_DATE('2023_10_05', '%Y_%m_%d')
+    STR_TO_DATE('2023-10-05', '%Y-%m-%d')
 ), (
     'Finance Statement 001.pdf',
     NULL,
-    STR_TO_DATE('2023_11_01', '%Y_%m_%d'),
+    STR_TO_DATE('2023-11-01', '%Y-%m-%d'),
     NULL,
-    STR_TO_DATE('2023_11_07', '%Y_%m_%d')
+    STR_TO_DATE('2023-11-07', '%Y-%m-%d')
 ), (
     'Finance Statement 002.pdf',
     NULL,
-    STR_TO_DATE('2023_12_01', '%Y_%m_%d'),
+    STR_TO_DATE('2023-12-01', '%Y-%m-%d'),
     NULL,
-    STR_TO_DATE('2023_12_03', '%Y_%m_%d')
+    STR_TO_DATE('2023-12-03', '%Y-%m-%d')
 ), (
     'Finance Statement 003.pdf',
     NULL,
-    STR_TO_DATE('2024_01_01', '%Y_%m_%d'),
+    STR_TO_DATE('2024-01-01', '%Y-%m-%d'),
     NULL,
-    STR_TO_DATE('2024_01_12', '%Y_%m_%d')
+    STR_TO_DATE('2024-01-12', '%Y-%m-%d')
 ), (
     'Auto Claim - December 2022.pdf',
     NULL,
-    STR_TO_DATE('2022_12_12', '%Y_%m_%d'),
+    STR_TO_DATE('2022-12-12', '%Y-%m-%d'),
     NULL,
-    STR_TO_DATE('2022_12_12', '%Y_%m_%d')
+    STR_TO_DATE('2022-12-12', '%Y-%m-%d')
 ), (
     'Auto Claim - January 2023.pdf',
     NULL,
-    STR_TO_DATE('2023_01_13', '%Y_%m_%d'),
+    STR_TO_DATE('2023-01-13', '%Y-%m-%d'),
     NULL,
-    STR_TO_DATE('2023_01_13', '%Y_%m_%d')
+    STR_TO_DATE('2023-01-13', '%Y-%m-%d')
 );
 
 INSERT INTO `mydb`.`Tag` (
@@ -49,12 +49,12 @@ INSERT INTO `mydb`.`Tag` (
     Created
 ) VALUES (
     'finance',
-    STR_TO_DATE('2023_05_05', '%Y_%m_%d')
+    STR_TO_DATE('2023-05-05', '%Y-%m-%d')
 ), (
     'auto',
-    STR_TO_DATE('2023_12_12', '%Y_%m_%d')
+    STR_TO_DATE('2023-12-12', '%Y-%m-%d')
 ), (
     'claim',
-    STR_TO_DATE('2023_12_12', '%Y_%m_%d')
+    STR_TO_DATE('2023-12-12', '%Y-%m-%d')
 );
 

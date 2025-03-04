@@ -133,7 +133,7 @@ fn new_query_str<'a>(
                     return None;
                 };
 
-            // (karlr 2024_03_03): Foreign keys like ``Item_Id`` and
+            // (karlr 2024-03-03): Foreign keys like ``Item_Id`` and
             // ``Tag_Id`` at the moment only appear in the association
             // table and should not be seen anywhere else.
             let from_table_str: String =
@@ -367,7 +367,7 @@ ORDER BY
             Some((from, where_clause, countby_col)) => {
                 // link
                 // - url: <https://stackoverflow.com/questions/41887460/select-list-is-not-in-group-by-clause-and-contains-nonaggregated-column-inc>
-                // - retrieved: 2024_02_18
+                // - retrieved: 2024-02-18
                 let query = format!(
 r#"SELECT {} FROM `{}` WHERE `Id` IN (
     SELECT `Id`
@@ -662,7 +662,7 @@ pub struct Date {
     pub Date: NaiveDateTime,
 }
 
-// (karlr 2024_02_27): I REALLY THINK I SHOULDN'T HAVE TO DO THIS!!!!
+// (karlr 2024-02-27): I REALLY THINK I SHOULDN'T HAVE TO DO THIS!!!!
 fn to_datetime(date_str: &str) -> String {
     format!("{} 00:00:00", date_str)
 }
@@ -1239,7 +1239,7 @@ pub async fn reset_db(
     let root: DbRoot = serde_json::from_str(&json)
         .unwrap();
 
-    // // (karlr 2024_02_20): Each file needs to be run in a
+    // // (karlr 2024-02-20): Each file needs to be run in a
     // // separate statement in order to avoid race conditions.
     run_sql_statements_from_file(&pool, &NEWDB_SQL_PATH).await;
     // run_sql_file(&pool, &STORED_FUNCTION_SQL_PATH[0]).await;
@@ -1329,7 +1329,7 @@ pub mod tests {
             list.into_iter()
                 .enumerate()
                 .filter(|(index, _)| {
-                    // (karlr 2024_02_15)
+                    // (karlr 2024-02-15)
                     // ``&((*index as i32) + 1)`` !!!?
                     // I really feel like I shouldn't have to do this.
                     !minus.contains(&((*index as i32) + 1))

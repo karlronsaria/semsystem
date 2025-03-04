@@ -1,6 +1,6 @@
 -- # link
 -- - url: <https://www.artfulsoftware.com/infotree/qrytip.php?id=552&m=0>
--- - retrieved: 2024_02_20
+-- - retrieved: 2024-02-20
 
 DELIMITER $$
 
